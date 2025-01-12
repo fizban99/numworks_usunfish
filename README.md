@@ -3,7 +3,7 @@ Chess game for the NumWorks calculator in micropython based on Sunfish
 
 The Sunfish engine has been ported to micropython to be able to work decently on devices with limited memory.
 
-It has 6 levels of difficulty (use Ln to change levels or "N" on the desktop) and you can undo the last move (only the last one, with backspace).
+It has 7 levels of difficulty (use Ln to change levels or "N" on the desktop) and you can undo the last move (only the last one, with backspace).
 Use Pi (or "P" on the desktop) to switch to black (rotates the board and makes the engine move) 
 You select the piece to move with the cursor keys and OK (or "Enter" on the Desktop). You can cancel the move selecting again the piece.
 
