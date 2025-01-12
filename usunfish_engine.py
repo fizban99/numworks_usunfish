@@ -864,7 +864,7 @@ def can_kill_king(mv, ccheck = True):
     if mv!=0:
         reverse()
         pscore = sc
-        wc_bc_ep_kp = lwc_bc_ep_kp
+        wc_bc_ep_kp, lwc_bc_ep_kp = lwc_bc_ep_kp, wc_bc_ep_kp
         restore(mv, dif)
     else:
         rotate()
@@ -873,7 +873,7 @@ def can_kill_king(mv, ccheck = True):
     if res[0]&0x3FFF ==0:
         return True
     if ccheck:
-        return any( abs((m&63) - (wc_bc_ep_kp&0xFF)) < 2 for m in res)
+        return any( abs((m&63) - (lwc_bc_ep_kp&0xFF)) < 2 for m in res)
     return False
     
 def threefold():

@@ -10,7 +10,7 @@ You select the piece to move with the cursor keys and OK (or "Enter" on the Desk
 Requires the usunfish_engine.py to be also loaded in the calculator.
 This version can be run on a PC.
 
-You can find the minified NumWorks version at https://my.numworks.com/python/fizban/usunfish_chess and https://my.numworks.com/python/fizban/usunfish_engine. You have to send both files to the calculator and execute usunfish_chess.py
+You can find the minified NumWorks version at (https://my.numworks.com/python/fizban/usunfish_chess) and (https://my.numworks.com/python/fizban/usunfish_engine). You have to send both files to the calculator and execute usunfish_chess.py
 
 
 You can play directly on your browser thanks to pyodide integration of pygame:
