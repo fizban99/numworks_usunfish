@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>uSunfish</title>
+    <title>μSunfish for NumWorks</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -51,6 +51,8 @@
           pyodide.unpackArchive(zipBinary, "zip", { extractDir: "." });
           pyodide.runPythonAsync(`
 import chess
+import js
+js.document.title = "μSunfish for NumWorks"
 chess.main()
 `)
         }
@@ -59,7 +61,7 @@ chess.main()
       </script>
 
 <div class="demo">
-    <div class="demo-header">uSunfish for NumWorks by fizban99</div>
+    <div class="demo-header">μSunfish for NumWorks by fizban99</div>
     <div class="demo-content">
         <canvas id="canvas"></canvas>
     </div>
