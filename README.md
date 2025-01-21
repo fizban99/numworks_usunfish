@@ -26,7 +26,7 @@ You can play directly on your browser thanks to pyodide integration of pygame (i
 - Since it has no hash table, it uses a slightly modified pst for each move, to prevent the moves from being too deterministic.
 - It contains a small opening book of 1452 plies based on the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) openings file.
 - As a reply of non-common openings, it has 5 different answers to non-common starting positions using the 400 moves.pgn file from [https://www.scacchi64.com/downloads.html](https://www.scacchi64.com/downloads.html)
-- The hardest level is aligned with an ELO 1450 against the Patricia engine simulating that ELO.
+- The hardest level is aligned with an ELO 1450 against the Patricia engine simulating that ELO. This engine easily beats the [badger2040 port](https://github.com/niutech/chess-badger2040).
 - The pst tables are directly  loaded from a base64-encoded string to save code space
 - It adds an end-game pst table for the king, using the PESTO version.
 - Instead of a string, the board is a 64-item list that is part of the global position. Although a list to store the board is memory-hungry, its updatable and faster for restoring the difference when returning from a recursive call.
