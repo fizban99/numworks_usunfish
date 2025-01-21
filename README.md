@@ -1,4 +1,4 @@
-# uSunfish Chess for the NumWorks
+# μSunfish Chess for the NumWorks
 Chess game for the NumWorks calculator in micropython based on Sunfish
 
 The [Sunfish engine](https://github.com/thomasahle/sunfish) has been ported to micropython to be able to work decently on devices with limited memory.
