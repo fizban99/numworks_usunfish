@@ -21,6 +21,7 @@ You can play directly on your browser thanks to pyodide integration of pygame (i
 
 
 ## Features
+- 7 levels of difficulty based on a maximum of node evaluation (from 125 in level 0 up to 8000 nodes in level 6)
 - Reduced memory footprint in the NumWorks by extensively using some micropython features such as string interning and 31-bit smallints and removing the object-oriented approach of the original Sunfish.
 - Although it has no hash table, it has a small cache to effectively reduce the node traversing time on sequential iterations during the iterative deepening MTD-bi search
 - Since it has no hash table, it uses a slightly modified pst for each move, to prevent the moves from being too deterministic.
