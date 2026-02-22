@@ -50,10 +50,10 @@
           let zipBinary = await zipResponse.arrayBuffer();
           pyodide.unpackArchive(zipBinary, "zip", { extractDir: "." });
           pyodide.runPythonAsync(`
-import chess
+import usunfish_chess
 import js
 js.document.title = "μSunfish for NumWorks"
-chess.main()
+usunfish_chess.main()
 `)
         }
   

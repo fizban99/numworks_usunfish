@@ -1,16 +1,16 @@
 # μSunfish Chess for the NumWorks
 Chess game for the NumWorks calculator in micropython based on Sunfish
 
-The [Sunfish engine](https://github.com/thomasahle/sunfish) has been ported to micropython to be able to work decently on devices with limited memory.
+The [Sunfish engine](https://github.com/thomasahle/sunfish) has been [ported to micropython](https://github.com/fizban99/numworks_usunfish) to be able to work decently on devices with limited memory.
 
 It has 7 levels of difficulty (use Ln to change levels or "N" on the desktop) and you can undo the last move (only the last one, with backspace).
 Use Pi (or "P" on the desktop) to switch to black (rotates the board and makes the engine move) 
 You select the piece to move with the cursor keys and OK (or "Enter" on the Desktop). You can cancel the move selecting again the piece.
 
-Requires the usunfish_engine.py to be also loaded in the calculator.
+Requires the usunfish_chess.py, usunfish_engine.py, usunfish_data.py and usunfish_gmv.py to be also loaded.
 This version can be run on a PC.
 
-You can find the minified NumWorks version at [my repository - usunfish_chess](https://my.numworks.com/python/fizban/usunfish_chess) and [my repository - usunfish_engine](https://my.numworks.com/python/fizban/usunfish_engine). You have to send both files to the calculator and execute usunfish_chess.py
+You can find a simplified minified NumWorks version at [my repository - usunfish_chess](https://my.numworks.com/python/fizban/usunfish_chess) and [my repository - usunfish_engine](https://my.numworks.com/python/fizban/usunfish_engine). You have to send both files to the calculator and execute usunfish_chess.py
 
 
 You can play directly on your browser thanks to pyodide integration of pygame (it takes some time for the initial load):
@@ -23,11 +23,11 @@ You can play directly on your browser thanks to pyodide integration of pygame (i
 ## Features
 - 7 levels of difficulty based on a maximum of nodes evaluated (from 125 in level 0 up to 8000 nodes in level 6)
 - Reduced memory footprint in the NumWorks by extensively using some micropython features such as string interning and 31-bit smallints and removing the object-oriented approach of the original Sunfish.
-- Although it has no hash table, it has a small cache to effectively reduce the node traversing time on sequential iterations during the iterative deepening MTD-bi search
-- Since it has no hash table, it uses a slightly modified pst for each move, to prevent the moves from being too deterministic.
-- It contains a small opening book of 1452 plies based on the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) openings file.
+- It has a small hash table to effectively reduce the node traversing time on sequential iterations during the iterative deepening MTD-bi search
+- It contains a small opening book of 1613 plies based on the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) and [Unique v110225](https://sites.google.com/site/computerschess/unique-suite-110225) openings files.
 - As a reply of non-common openings, it has 5 different answers to non-common starting positions using the 400 moves.pgn file from [https://www.scacchi64.com/downloads.html](https://www.scacchi64.com/downloads.html)
-- The hardest level is aligned with an ELO 1450 against the Patricia engine simulating that ELO. This engine easily beats the [badger2040 port](https://github.com/niutech/chess-badger2040).
-- The pst tables are directly loaded from a base64-encoded string to save code space
-- It adds an end-game pst table for the king, using its [PeSTO version](https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function).
+- The hardest level is aligned with an ELO 2100 against the Stockfish engine simulating that ELO. This engine easily beats the [badger2040 port](https://github.com/niutech/chess-badger2040).
+- The pst and mobility tables have been tuned using the quiet-labeled.v7.epd positions file. 
 - Instead of a string, the board is a 64-item list that is part of the global position. Although a list to store the board is memory-hungry, its updatable and faster for restoring the difference when returning from a recursive call.
+- Besides the original [Sunfish](https://github.com/thomasahle/sunfish), this engine takes also inspiration on [MinimalChess](https://github.com/lithander/MinimalChessEngine),  [4ku](https://github.com/kz04px/4ku) and [MadChess](https://www.madchess.net/)
+- You can also play against [level 0](https://lichess.org/@/uSunfish-l1) and [level 6](https://lichess.org/@/uSunfish-l7) on lichess. There is also a special [easier level](https://lichess.org/@/uSunfish-l0).

@@ -1,70 +1,20 @@
-const = lambda x: x 
-from random import randint
-# Maximum number of moves to keep in the history 
-_MAX_HIST = const(10)
-
-###############################################################################
-# Helper functions
-###############################################################################
-
-def fb64(eb):
-    """Decode a base64 encoded string"""
-    base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-    dl, ai = (len(eb) * 3) // 4 - eb.count('='), 0
-    for i in range(0, len(eb), 4):
-        bi = ((base64.index(eb[i])) << 18) | ((base64.index(eb[i+1])&0x3F) << 12) | ((base64.index(eb[i+2])&0x3F) << 6) | base64.index(eb[i+3])&0x3f
-        for byte in (bi >> 16, (bi >> 8) & 0xFF, bi & 0xFF):
-            if ai < dl: yield int(byte); ai += 1
-
-def b(x):
-    """Creates a bytestring from a base64 encoded string"""
-    return bytes(fb64(x))
-
-###############################################################################
-# Piece-Square tables. Tune these to change sunfish's behaviour
-###############################################################################
-
-# The pst tables are encoded in base64 to save space and to allow string interning when possible. 
-# the original sunfish values are divied by 4. They fit in 1 byte except for the king values
-# The king values have an offset of 14975 
-# The max score has then a maximum value with an offset of 32768 (to allow negative values) that fits in 2 bytes
-# to make them uint16.
-# The following code decodes the psts so that the source code is smaller.
-# For the end game, we use the pesto engame table for the king only
-pst_b = b('GRkZGRkZGRksLS4rMi0uLxogHiQjICQaFB0YHBwZHBUSGRsbGhkZExMbGhYWGBkUERsXDxAVGREZGRkZGRkZGTU4MzNDODc0RURfPUdVRUJIVkZYWExVRUxMUU9OUExKRUdNS0tORkZBSElLSklIQkBCRkZGRkBBM0A/QEE9QDRBPDs9SjVGQ01VWEVGV1BKTVlIWl1NV0xWVFVYVlZTUlNSVFVUVFBRU1ZWU1JWVVNUVVJRUVFVVE5QTE1MTE1NgH+AeIGAhYSFf4WIhYeAhnyAfoCDfn57d3l7e3x2dXZwb3NydHBscG1wbXFxb3Fsam5wcXBtbGpwcXN5d3Nwb+no5s757v7u6/D35e379u7n8/D3+vjz6Ojk7ezu7eXm5OTn5+jl4+Lg5uXl5OXk4d/j6OPk5OPe3uDg5eDf390aJiQAACgtCREbJicnJhsZCRwKJAggIhELJRsYFBwZDAsODBIMDRcMDQ4OBQkREREYGRUMChQcGh0gGBUaGCMd')
-pst_k = b('BhAUFBYcGhQWHRwdHSIeGxsdHhweJCQcFx4fHx8hHxkUGB4fHx4bFhQYGx4eHRoWEhYaHBwaFxQLEBMWEhUTDg==')
-inc='\x00\x00\x00\x00\x00'
-def g_p(i, xor):
-    return pst_b[i^xor]-ord(inc[0])
-
-def g_n(i, xor):
-    return pst_b[(i^xor)+64]+ord(inc[1])
-
-def g_b(i, xor):
-    return pst_b[(i^xor)+128]-ord(inc[2])
-
-def g_r(i, xor):
-    return pst_b[(i^xor)+192]+ord(inc[3])
-
-def g_q(i, xor):
-    return pst_b[(i^xor)+256]+ord(inc[4])
-
-def g_k(i, xor):
-    return pst_b[(i^xor)+320] +14975 
-
-def g_k_eg(i, xor):
-    return pst_k[i^xor] +14975 
-
-pst = [g_p,
-         g_n,
-         g_b,
-         g_r,
-         g_q,
-         g_k
-]
+from time import time as monotonic
+from random import randint, seed
+seed(monotonic())
 
 
 
+from usunfish_data import *
+from usunfish_gmv import parse_sibl, makes_check, gen_moves, value
+import usunfish_gmv as ugmv
+
+# initial bytes of the opening tables
+_OP_IND2 = 0
+_OP_IND = 1
+# Maximum number of moves to keep in the history
+_MAX_HIST = 10
+# Memory allocation for the move buffer
+gm_buf = [0]*600
 ###############################################################################
 # Global constants
 ###############################################################################
@@ -72,133 +22,83 @@ pst = [g_p,
 # By prepending an underscore to the variable name saves a little bit more memory
 # https://docs.micropython.org/en/latest/develop/optimizations.html
 
-_A1 = const(56)
-_H1 = const(63)
-_A8 = const(0)
-_H8 = const(7)
+_A1 = 56
+_H1 = 63
+_A8 = 0
+_H8 = 7
 
-_NO = const(-8)
-_E = const(1)
-_S = const(8)
-_W = const(-1)
-_P = const(0)        
-_N = const(1)
-_B = const(2)
-_R = const(3)
-_Q = const(4)
-_K = const(5)
+_NO = -8
+_S = 8
+_P = 0
+_R = 3
+_K = 5
+_BP = 8
 
-op_mode = 1
+# In the original sunfish, mate value must be greater than 8*queen + 2*(rook+knight+bishop)
+# King value is set to twice this value such that if the opponent is
+# 8 queens up, but we got the king, we still exceed MATE_VALUE.
+# When a MATE was detected, the score was set to MATE_UPPER
+# In uSunfish mate is explicitely detected, so no need to have a high value for the king
+# we can use constants that are close to the original, but fit in 14 bits.
+# This will allow efficient usage of 30 bit positive integers in micropython
+_MT_LW = 12680
+_MT_UP = 16383
+_CANCEL = 16384
+_NCANCEL = 0
+# Constants for tuning search
+_QS = 17
+_QS_A = 37
+_EVAL_ROUGHNESS = 4
+_MAX_DEPTH = 9
+# limit depth for quiescence search 
+_MAX_QS = 8
+max_qs = _MAX_QS
+max_nodes = 8000
+idepth = 1
+# killer heuristic table
+t_kll = [0]*(_MAX_DEPTH)
 
+# Transposition tables
+# with a replacement strategy based on age
+# useful for the hash move
+_T_SZS = 152
+t_szs = [0, 0, 0, 0]
+tp_scoreh = [[0]*_T_SZS, [0]*_T_SZS, [0]*_T_SZS, [0]*_T_SZS]
+# preallocate the score table
+tp_scored = [[0]*_T_SZS*2, [0]*_T_SZS*2, [0]*_T_SZS*2, [0]*_T_SZS*2]
+max_d_sc = [0, 0, 0, 0]
+nodes = 0
+op_mode = 1 # indicates whether in opening mode or not
 
+op_ind = _OP_IND  # initial byte of the opening table
+
+last_mv = -1
+ply = 0 # which ply move we are in
+req_d = 0 # what is the requested depth of the current iteration
+iter = 0 # iteration counter for the transposition table age tracking
+h_mv = [[0]*32, [0]*32]  # move history heuristic table for moves white and black
+h_va = [[0]*32, [0]*32]  # move history heuristic table for values white and black
+max_h_mv = [0,0]  # upper index of the history heuristic
+eg = 0  # whether we are in end game mode or not (king and pawn switch pst in end game)
 # Our board is represented as a list of 64 integers. Each element represents a square.
 # There is no padding, so this diverges from the original sunfish implementation
 # each integer is a piece, even numbers for white pieces, odd numbers for black pieces
-# The space is 0 or 1 indistinctly (0 when it's white's turn, 1 when it's black's turn)
+# The space is 6 or 14 indistinctly (6 when it's white's turn, 14 when it's black's turn)
 # The initial board state, encoded in base64 to save space
-board = [11, 9, 10, 12, 13, 10, 9, 11, 
-         8, 8, 8, 8, 8, 8, 8, 8, 
-         6, 6, 6, 6, 6, 6, 6, 6,
-         6, 6, 6, 6, 6, 6, 6, 6,
-         6, 6, 6, 6, 6, 6, 6, 6,
-         6, 6, 6, 6, 6, 6, 6, 6,
-         0, 0, 0, 0, 0, 0, 0, 0,
-         3, 1, 2, 4, 5, 2, 1, 3]
-wc_bc_ep_kp= 1015936
-pscore = 0
-                    
-# Lists of possible moves for each piece type.
-# they are encoded in base64 to save space. 
-# each byte represents the change in position for a move between -17 and 17. 
-# to make it a uint8, it is stored with an offset of 17.
-directions = (
-'\x02\t\x02\x01\x01\x08\x03\n', 
-'\x03\x02\x04\x0b\x04\x1b\x03"\x01 \x00\x17\x00\x07\x01\x00', 
-'\x03\n\x03\x1a\x01\x18\x01\x08', 
-'\x02\t\x03\x12\x02\x19\x01\x10', 
-'\x02\t\x03\x12\x02\x19\x01\x10\x03\n\x03\x1a\x01\x18\x01\x08', 
-'\x02\t\x03\x12\x02\x19\x01\x10\x03\n\x03\x1a\x01\x18\x01\x08'
-)
-
-
-# Mate value must be greater than 8*queen + 2*(rook+knight+bishop)
-# King value is set to twice this value such that if the opponent is
-# 8 queens up, but we got the king, we still exceed MATE_VALUE.
-# When a MATE is detected, we'll set the score to MATE_UPPER 
-_MT_LW = const(15000 - 10 * 232)
-_MT_UP = const(15000 + 10 * 232)
-
-# Constants for tuning search
-_QS = const(14)
-_QS_A = const(34)
-_EVAL_ROUGHNESS = const(4)
-_MAX_QS = const(2)
-_MAX_DEPTH = const(40)
-
-# Transposition tables
-# that prioritize the closest nodes to the main node
-# useful for killer heuristics
-# useful for storing the score of the closest nodes to the main node
-_T_SZS = 154
-t_szs = 0
-tp_scoreh= [None]*_T_SZS
-# preallocate the score table
-tp_scored= [None]*_T_SZS*2
-max_d_sc = _MAX_DEPTH + _MAX_QS
-nodes = 0
-
-
-##############################################################################3
-# Opening book
-# The opening book is stored as a sequence of nibbles
-# Each nibble is a move index of the possible moves for the current position sorted by score
-# A value of 15 is followed by the number of variations after the move. If 0, it's a leaf node
-# The opening book contains 1452 plies stored in 1059 bytes from the Balsa_270423.pgn file
-# for openings up to 10 pl
-###############################################################################
-_MAX_OP_D = const(11)
-op_ind = 1
-op = b('DifjEyIeHo4C4DEeECt+hSAhTyM+BN7S3g5wTgbgzgIhFxfyfgAeACFkPgPn4APgHgHgERDnARAE4JJRBXHgMSsWA3EBBOAeECtkIKIFMA6hLSEi4AEEZoMeAksA6EExYi4AETNO/o5uAuAgAT8wJxDpMiLg004CNeAOAuAuADcxQj5QBnMQJ0zwMjcxQiIOrrXtS/jgAAExQuAeAsTCBSHhIT9uCEXzToMxTlkOA+GuFOEeEOAuG+BKAGRzMRNXMUJ+vhIh4AROAhRiHD7G6hLSEmETFCLgPiXhERLg53LgIi52Ij6AED5QALAeDo4CQrQQEhE8ngLg6AHgcRFsHg5wHhIOUi6FA7QB/sAjr+fgIOAzERAREAPskgMugX4CA2ZHMQ6yJDsUnq6+BeHtS/75Xb5TlJAUIDaeVmQA4K4I4T4C4VcgTRBGRD4gBDu2RzPgREcRNX4TFCYc6kz9IAORAC5D4BMFACLgJ2HOp+vqIUwic5ADHhuXcYNhfh6uCSEREhEt+SeyTtdhSOzh6E4SUBEQAyKVJeAQLnAB4hHgHhPgHgYuLs4FLrwlLhXeDr6CKOjV5OAi5FLg6+U53gtbEvLhouBeHoJV4S4eguvd6OsuAk7LM+k2LgPgUvngNdvswlIuBV3hLo62vuJODk7uCOAh4F6065EyHgXh6+U13nLg5eHtUiUn4F606x4FLhAB9y4ACE0iIg4C9fER4C4AHgYevrJAE+AOn46NguAG8QYhjhEEQwjiAODrHhA44F4M5Afr4VDSEumuVD4XCecwV+QgA/IOAgA/PgTgkALhhJQxJVECAD4ADgDg5VG+8A+gAeAD4CEuGDBGHnEyIuBO0QAQHU4L8vbhHhLhESZSID4OngEuBeA+AhcSAC4EEi4DOTDgAy4RMDvvEDTgTUFBEuYBEy4D7VTgZiZeAeDeAQFuBxkX7iIhEBG36AAeASt+jl4OQhRj9AASHg3ifhF83gKG4FfkEuAm5ODS3gAADggeDOFihelWjgO3GYQ+WhIe/kMuFR1xIRvnEgETdEHlEBKRUA4euecR4Ofk9oUi6e+3IqoAOQAuJeLmABs68A4GGODr4OohTOCuAA5yPsa+COA+ses4NhKS4CtkIE4XPADAAtAuXlFuAB4CeyQeAOvevgAR4Z4C6w/pIY4ELg61YhIjMQ4BJwAhDmmehBJG4G4CQhMC3DABQh5uA3HgI+kSU3FAASHXEOJuDFcRJBPq6eHWHv4Or05uenS+C+x2AC6KTruubgshThEOBuDBYyUyAuHPUbQwCzkiECcYDgLgLglSVuTgEmSODk4CEeTg6Wv2HkGeB+s6++vg7CIRLgJOAc6Ogz95J7jgTr4etz6+BuBhNUIGjgcRzqkhDTAOCb6+DsIh4BAiTgHgfDsiREQQ')
-op2 = b('7t4+X8/k/p/m/k4+X8/k/p/m/l4+X8/k/p/m/o4+X8/k/p/m/p4+X8/k/p/m8+Pl/P5P6f5vrj5fz+T+n+b04+X8/k/p/m9ePl/P5P6f5vnj5fz+T+n+b24+X8/k/p/m/m4+X8/k/p/m/n4+X8/k/p/m++Pl/P5P6f5vjj5fz+T+n+b84+X8/k/p/m8=')
-
-def op_get(i, op):
-    if i>>1 >= len(op):
-        return 0
-    return (op[i >> 1] >> ((i & 1) ^ 1) * 4) & 0xF
-
-
-def parse_sibl(c_ind, d, op):
-    if d > _MAX_OP_D:
-        return [], c_ind    
-    sibl = []
-    n_sibl = op_get(c_ind, op)
-    # read number of siblings
-    if n_sibl == 14 and op_get(c_ind + 1, op) < 4:
-        n_sibl = op_get(c_ind + 1, op)+2
-        c_ind += 2
-    elif n_sibl == 15:
-        n_sibl = 0
-        c_ind += 1
-    elif n_sibl == 14 and op_get(c_ind + 1, op) == 14 and c_ind == 0:
-        # 400 move book exception
-        n_sibl = 16
-        c_ind += 2
-    else:
-        n_sibl = 1
-    for _ in range(n_sibl):
-        # read node value
-        node = op_get(c_ind, op)
-        if node == 14 and op_get(c_ind + 1, op) > 3:
-            node = node + op_get(c_ind + 1, op)-4
-            c_ind += 1
-        c_ind += 1
-        sibl.append((node, c_ind))
-        # Recursively parse children
-        _, c_ind = parse_sibl(c_ind , d+1, op)
-    
-    return sibl, c_ind
-
-
+position = [
+    [11, 9, 10, 12, 13, 10, 9, 11,  # board
+     8, 8, 8, 8, 8, 8, 8, 8,
+     6, 6, 6, 6, 6, 6, 6, 6,
+     6, 6, 6, 6, 6, 6, 6, 6,
+     6, 6, 6, 6, 6, 6, 6, 6,
+     6, 6, 6, 6, 6, 6, 6, 6,
+     0, 0, 0, 0, 0, 0, 0, 0,
+     3, 1, 2, 4, 5, 2, 1, 3],
+    60 | (4 << 8),  # ksq
+    1015936,  # wc_bc_ep_kp
+    0,  # pscore
+    0,  # mobility
+]
 
 ###############################################################################
 # Board functions
@@ -206,235 +106,128 @@ def parse_sibl(c_ind, d, op):
 
 def restore(mv, dif):
     """Restore a board from a difference"""
-    global board
-    board[(mv>>8)&0xFF] = (dif>>4) & 0x0F
-    board[mv&0x3F] = dif&0x0F
+    pos = position
+    board, ksq, _, _, _ = pos
+
+    board[(mv >> 8) & 0xFF] = (dif >> 4) & 0x0F
+    board[mv & 0x3F] = dif & 0x0F
     if dif > 0XFFFF:
         # castling
-        i = (dif>>16)&0xFF
-        board[(dif>>8)&0xFF] = board[i]
+        i = (dif >> 16) & 0xFF
+        board[(dif >> 8) & 0xFF] = board[i]
         board[i] = _R
-    elif dif >0xff:
+    elif dif > 0xff:
         # en passant
-        board[(dif>>8)&0xFF] = _P|8
+        board[(dif >> 8) & 0xFF] = _BP
+
+    if board[(mv >> 8) & 0xFF] == _K:
+        pos[1] = (ksq & 0xFF00) | (mv >> 8)
+
 
 def ghash():
-    global board, pscore, wc_bc_ep_kp
     """Generate a hash from the board
     and store it as a smallint of 31 bits (30 bit + sign bit)
-    Since a micropython hash is 16 bits, we need to combine two hashes
+    Since the micropython hash is quite simple and it is
+    16 bits for bytes, we need to combine two hashes
     """
-    lbrd = board
-    h1= bytes((lbrd[i]  << 4) | (lbrd[i+1] ) for i in range(0,64,2))
-    h2= bytes(reversed(h1))
-    h = ((hash(h1)<<16)|(hash(h2)^(wc_bc_ep_kp<<16)))& 0x7FFFFFFF
-    return -(h&0x3FFFFFFF) if h&0x40000000==0x40000000 else h
+    board, ksq, wc_bc_ep_kp, pscore, _  = position
+    h1 = bytes([((board[i] << 4))+1 | (board[i+1]+1) for i in range(0, 64, 2)])
+    h2 = (hash(bytes(reversed(h1)))  & 0xFFFF)^ksq
+    h1 = hash(h1) & 0xFFFF
+    h2 = h1^h2
+    sign = h1 & (1<<14) 
+    h = (((h1 & 0x3FFF) << 16) | h2 )^ wc_bc_ep_kp
+    return -h if sign else h
 
 
 def reverse():
     """Swap white and black pieces just by flipping
     the highest bit of each nibble and reverse the board"""
-    global board
-    # for i in range(32):
-    #     pos[i], pos[63-i] = pos[63-i]^0x08, pos[i]^0x08
+    pos = position
+    board, ksq, wc_bc_ep_kp, pscore, mob = pos
 
-    board =  [x ^ 0x08 for x in reversed(board)]
-
-
-
-
-def rotate_and_set(score, wc, bc, ep, kp, turn, nullmove=False):
-      """Rotates the board and sets new values"""
-      global board, pscore, wc_bc_ep_kp
-      reverse()
-      turn = turn^1
-      pscore = -score
-      wc_bc_ep_kp = (turn<<20)|(bc<<18) | (wc<<16) | (63-ep if ep!=128 and not nullmove else 128)<<8 | (63-kp if kp!=128 and not nullmove else 128)
+    # board.reverse()
+    # for i in range(64):
+    #     board[i] = board[i] ^ 8
+    pos[0] =  [x ^ 0x08 for x in reversed(board)]    
+    pos[1] = ((ksq >> 8)^63) | (((ksq & 0xFF)^63) << 8)
 
 
-
-
+def rotate_and_set(score, wc, bc, ep, kp, turn, nullmove, mob):
+    """Rotates the board and sets new values"""
+    # board, ksq, wc_bc_ep_kp, pscore = position
+    pos = position
+    reverse()
+    turn = turn ^ 1
+    pos[3] = -score
+    pos[2] = (turn << 20) | (bc << 18) | (wc << 16) | (ep^63 if ep !=
+                                                       128 and not nullmove else 128) << 8 | (kp^63 if kp != 128 and not nullmove else 128)
+    pos[4] = -mob
 
 def rotate(nullmove=False):
-      """Rotates the board, preserving enpassant, unless nullmove"""
-      global board, pscore, wc_bc_ep_kp
-      turn = (wc_bc_ep_kp >>20) 
-      wc = (wc_bc_ep_kp>>18) &3
-      bc = (wc_bc_ep_kp>>16) & 3
-      ep = (wc_bc_ep_kp>>8) & 0xFF
-      kp = wc_bc_ep_kp & 0xFF
-      rotate_and_set(pscore, wc, bc, ep, kp, turn, nullmove)
+    """Rotates the board, preserving enpassant, unless nullmove"""
+    board, ksq, wc_bc_ep_kp, pscore, mob = position
+
+    turn = (wc_bc_ep_kp >> 20)
+    wc = (wc_bc_ep_kp >> 18) & 3
+    bc = (wc_bc_ep_kp >> 16) & 3
+    ep = (wc_bc_ep_kp >> 8) & 0xFF
+    kp = wc_bc_ep_kp & 0xFF
+    rotate_and_set(pscore, wc, bc, ep, kp, turn, nullmove, mob)
 
 
+def move(mv, val=None):
+    pos = position
+    board, ksq, wc_bc_ep_kp, pscore, mob = pos
 
-###############################################################################
-# Chess logic
-###############################################################################
-
-
-def gen_moves(lvalue=-_MT_LW, ccheck=True):
-    """A state of a chess game contains:
-    board -- a 32 byte representation of the board
-    score -- the board evaluation in two bytes with an offset of 32768
-    wc -- the castling rights, [west/queen side, east/king side] as the bits 2 and 3 of a byte
-    bc -- the opponent castling rights, [west/king side, east/queen side] as the bits 0 and 1 of the same previous byte
-    ep - the en passant square as a square number or 128 if there is no en passant square
-    kp - the king passant square as a square number or 128 if there is no king passant square
-    """
-    # For each of our pieces, iterate through each possible 'ray' of moves,
-    # as defined in the 'directions' map. The rays are broken e.g. by
-    # captures or immediately in case of pieces such as knights.
-    global board, directions, pscore, wc_bc_ep_kp
-    moves = []  
-    ma=moves.append
-    lbrd= board
-    xor = ((wc_bc_ep_kp>>20))*7
-    for i, p in ((i, p) for i, p in enumerate(lbrd) if p<=5):
-        # Skip empty squares and opponent's pieces
-        iscore = None
-        dir = directions[p]
-        for dn in range(0, len(dir)-1,2):
-            dc, d = ord(dir[dn])  - 2, ord(dir[dn+1]) - 17
-            # calculate column for detecting out of bounds
-            c = i&7 # equivalent to i % 8
-            j = i
-            while True:
-                j += d
-                c += dc
-                # Stay inside the board
-                # equivalent to if c<0 or c>7 or j<0 or j>63:
-                if (c & ~7) | (j & ~63):
-                    break
-                q = lbrd[j]
-                # Stay off friendly pieces
-                if q<6:
-                    break
-  
-                # Pawn move, double move and capture
-                if p == _P:
-                    if d in (_NO, _NO + _NO) and (q |8) != 14: break
-                    if d == _NO + _NO and (i < _A1 + _NO or ((lbrd[i + _NO]) |8) != 14): break
-                    if (
-                        d in (_NO + _W, _NO + _E)
-                        and (q|8) == 14
-                        and j not in ((wc_bc_ep_kp>>8)&0xFF,wc_bc_ep_kp&0xFF, (wc_bc_ep_kp&0xFF) - 1, (wc_bc_ep_kp&0xFF) + 1)
-                    ):
-                        break
-                    # If we move to the last row, we can be anything but a pawn and a king
-                    # so we can store the promotion in the move as the upper 2 bits
-                    if _A8 <= j <= _H8:
-                        for prom in b"\x01\x02\x03\x04": #NBRQ
-                            v, iscore = value(None, i,j,prom,p,q,xor, iscore, ccheck)
-                            if iscore==99999:
-                                # Return soon if we have a mate or an attack to kp
-                                # we set an invalid move 0 to signal a mate
-                                return [(v+32768)<<14]
-                            elif v >= lvalue:                            
-                                ma((i <<8)| j | ((prom-1)<<6)| (v+32768)<<14)
-                        break
-                # Move it
-                v, iscore = value(None, i,j,0,p,q, xor, iscore, ccheck)
-                if iscore==99999:
-                    # Return soon if we have a mate or an attack to kp
-                    # we set an invalid move 0 to signal a mate
-                    return [(v+32768)<<14]
-                elif v >= lvalue:   
-                    ma((i<<8)| j |(v+32768)<<14)
-                # Stop crawlers (PNK) from sliding, and sliding after captures
-                if p in b'\x00\x01\x05' or  (q<14 and q&8==8):
-                    break
-                # Castling, by sliding the rook next to the king
-                if i == _A1 and ((wc_bc_ep_kp>>18)&2)==2 and j<63 and lbrd[j + _E] == _K :
-                    it = j + _E
-                    jt = j + _W
-                    v,_ = value(None, it,jt,0,_K,6,xor, None, ccheck)
-                    if v >= lvalue:
-                        ma((it<<8)| jt | (v+32768)<<14)
-                    # break since we can't slide beyond the king
-                    break
-                if i == _H1 and ((wc_bc_ep_kp>>18)&1)==1 and j>0 and lbrd[j + _W] == _K:
-                    it = j + _W
-                    jt = j + _E
-                    v,_ = value(None, it,jt,0,_K,6,xor, None, ccheck)
-                    if v >= lvalue:
-                        ma((it<<8)| jt | (v+32768)<<14)
-                    # break since we can't slide beyond the king
-                    break
-    moves.sort()
-    return moves
-
-def move(mv, val = None):
-    global board, pscore, wc_bc_ep_kp
-
-    i, j, prom, turn = mv>>8, mv&63, ((mv&0xFF)>>6)+1,wc_bc_ep_kp >>20
+    xor = (wc_bc_ep_kp >> 20) * 7
+    i, j, prom, turn = mv >> 8, mv & 63, ((
+        mv & 0xFF) >> 6)+1, wc_bc_ep_kp >> 20
+    xor = turn * 7
     p = board[i]
-    # Copy variables and reset ep and kp
-    wc, bc, ep, kp = (wc_bc_ep_kp>>18)&3, (wc_bc_ep_kp>>16) & 3, 128, 128
-    val,_ = value(mv, i, j, prom, p, None, None, None) if val is None else (val, None)
-    score =  pscore + val
+    # Copy variables 
+    wc, bc, ep, kp = (wc_bc_ep_kp >> 18) & 3, (wc_bc_ep_kp >> 16) & 3,  (wc_bc_ep_kp >> 8) & 0xFF,wc_bc_ep_kp & 0xFF
+    q = board[j]
+    pp = p & 7
+    t = pp if (not eg or op_mode) else PSTMAP[pp] 
+    val = value(pst, i, j, prom, p, q, xor, eg, kp, ep, t) if val is None else (val)
+    # reset ep and kp
+    ep, kp = 128, 128
+    score = pscore + val
     # Actual move
-    dif = (board[i]<<4)| board[j]
+    dif = (board[i] << 4) | board[j]
     board[j] = p
-    board[i] = 6|(turn<<3)
+    board[i] = 6 | (turn << 3) 
     # Castling rights, we move the rook or capture the opponent's
-    wc = wc & 1 if i == _A1 else wc&2 if i == _H1 else wc
+    wc = wc & 1 if i == _A1 else wc & 2 if i == _H1 else wc
     # Black castling rights are inverted
-    bc = bc & 2 if j == _A8 else bc&1 if j == _H8 else bc
+    bc = bc & 2 if j == _A8 else bc & 1 if j == _H8 else bc
     # Castling
     if p == _K:
         wc = 0
         if abs(j - i) == 2:
             kp = (i + j) // 2
             k = _A1 if j < i else _H1
-            dif = (k<<16)| (kp<<8)|dif
-            board[k] = 6|(turn<<3)
+            dif = (k << 16) | (kp << 8) | dif
+            board[k] = 6 | (turn << 3)
             board[kp] = _R
+        ksq = (ksq & 0xFF00) | j
     # Pawn promotion, double move and en passant capture
     elif p == _P:
         if _A8 <= j <= _H8:
             board[j] = prom
         if j - i == 2 * _NO:
             ep = i + _NO
-        if j == (wc_bc_ep_kp>>8)&0xFF:
-            board [j + _S] = 6|(turn<<3)
-            dif = ((j + _S)<<8)|dif
-    
+        if j == (wc_bc_ep_kp >> 8) & 0xFF:
+            board[j + _S] = 6 | (turn << 3)
+            dif = ((j + _S) << 8) | dif
     # We rotate the returned position, so it's ready for the next player
-    rotate_and_set(score, wc, bc, ep, kp, turn)
+
+    pos[1] = ksq
+    rotate_and_set(score, wc, bc, ep, kp, turn, False, mob)
     return dif
 
 
-def value(mv, i, j, prom, p, q, xor, iscore, ccheck=True):
-    global board, pscore, wc_bc_ep_kp
-    lpst = pst
-    q = board[j] if q is None else q  
-    xor = ((wc_bc_ep_kp>>20))*7 if xor is None else xor
-    # Actual move
-
-    iscore = lpst[p&7](i,xor) if iscore is None else iscore
-    scj = lpst[p&7](j, xor)
-    score = scj - iscore
-
-    # Capture
-    if (q<14 and q&8==8):
-        ind = 63 - j 
-        score += lpst[q&7](ind, xor) 
-    # Castling check detection
-    if abs(j - (wc_bc_ep_kp&0xFF)) < 2 and ccheck:
-        ind = 63 - j
-        score += g_k(ind,xor) 
-     # Castling
-    if p == _K and abs(i - j) == 2:
-        score +=  g_r((i + j)>>1,xor)
-        score -=  g_r(_A1 if j < i else _H1,xor)
-    # Special pawn stuff
-    elif p == _P:
-        if _A8 <= j <= _H8:
-            score += lpst[prom](j,xor) - g_p(j,xor)
-        if j == (wc_bc_ep_kp>>8) & 0xFF:
-            score +=  g_p(63 - (j + _S),xor) 
-    iscore = 99999 if q|8 == 13 else iscore
-    return score, iscore
 
 
 ###############################################################################
@@ -442,301 +235,525 @@ def value(mv, i, j, prom, p, q, xor, iscore, ccheck=True):
 ###############################################################################
 
 
+def s_sc(tscd, tsch, i, mv, dr, best, h, fh, od):
+    """ Set move score in the hash table"""
+    tscd[i << 1] = mv
+    tscd[(i << 1)+1] = fh | (best+16384) | (dr <<
+                                            16) | ((od+16) << 20) | (iter << 25)
+    tsch[i] = h
 
-def s_tp(h, mv, e0, e1, d):
+
+def s_hmv(h_mv, h_va, mv, max_h_mv, w):
+    # search for existing mv in current range
+    # of history heuristics list
+    i = 0
+    try:
+        i = h_mv.index(mv, 0, max_h_mv)
+    except ValueError:
+        if max_h_mv < len(h_va):
+            i = max_h_mv
+            max_h_mv += 1      # use next free slot
+        else:
+            # replace least-used slot (single pass)
+            min_i = 0
+            min_v = h_va[0]
+            for j in range(1, len(h_va)):
+                v = h_va[j]
+                if v < min_v:
+                    min_v = v
+                    min_i = j
+            i = min_i
+            h_va[i] = 0        # reset its value
+
+    h_mv[i] = mv
+    v = h_va[i] + w
+    h_va[i] = 40 if v > 40 else 1 if v < 1 else v
+    return max_h_mv
+
+
+def s_entry(tp, mv, d):
+    """Store a move in the heuristics table"""
+    m = tp[d]
+    mv1 = m & 0x3FFF
+    mv2 = (m >> 16) & 0x3FFF
+    if mv != mv1 and mv != mv2:
+        tp[d] = (mv1 << 16) | mv
+
+
+def s_tp(h, mv, best, dr, val, od, fh, mob, incheck):
     """Store a chunk of data in a hash table
     The hash table has an index list with the 30-bit hashes (smallints),
     the data table has
-    tp_score:  ply-depth +best_mv, score,gamma. The depth is stored as 1 byte,
-    the mv, score,gamma are stored as 2-byte integers (4bytes). Depth is stored so that nodes closer to the main are
+    tp_score:  ply-depth +best_mv, score,gamma. The depth is stored as 4 bits,
+    the mv as 14 bits, score,gamma are stored as 2-byte integers. Depth is stored so that nodes closer to the main are
     preferred, and the moves are stored in the order they were found.
-    Depth is stored so that nodes closer to the main are
-    preferred, and the moves are stored in the order they were found.
+    If a new move is stored in the same hash, is is replaced
     """
     global tp_scoreh, tp_scored, max_d_sc, t_szs
+    global max_h_mv, max_h_mvm
 
-    if t_szs == _T_SZS and d>max_d_sc: 
-        return
+    
+    non_capt = (position[0][mv & 63] | 8 == 14)
+    turn = position[2]>> 20
+    if fh:
+        if val <= _QS and non_capt and dr < _MAX_DEPTH:
+            s_entry(t_kll, mv, dr)  # quiet move, store in killer table
+        if (val <= _QS and non_capt):  # quiet move, we use a history heuristics
+            if od > 0:
+                max_h_mv[turn] = s_hmv(h_mv[turn], h_va[turn], mv, max_h_mv[turn], od*od)
+    elif (val <= _QS and non_capt):  # quiet move that fail low update history heuristics
+        if od > 0:
+            max_h_mv[turn] = s_hmv(h_mv[turn], h_va[turn], mv, max_h_mv[turn], -od*od)
+
+    e = fh | (best+16384) | (dr << 16) | ((od+16) << 20) | (iter << 25)
+    it = iter
+    mv = mv | ((mob+512)<<14) | ((incheck>>1) << 29)
+    # if dr < _T_SZS2:
+    #     h, tp_scoreh2[dr] = tp_scoreh2[dr], h
+    #     mv, tp_scored2[dr<<1] = tp_scored2[dr<<1], mv
+    #     e, tp_scored2[(dr<<1)+1] = tp_scored2[(dr<<1)+1], e
+    #     it = e >> 25 # local iter
+    #     if h == 0 or h==tp_scoreh2[dr]:
+    #         return
+    hind = (h) & 3
+    new = False
+    tszs, tsch, tscd, md = t_szs[hind], tp_scoreh[hind], tp_scored[hind], max_d_sc[hind]
     try:
-        i = tp_scoreh.index(h,0,t_szs)
+        i = tsch.index(h, 0, tszs)
+        e2 = tscd[(i << 1)+1]
+        sod = ((e2 >> 20) & 0x1F)-16
+        sdr = (e2 >> 16) & 0xF
     except ValueError:
-        if t_szs < _T_SZS:
-            tp_scoreh[t_szs] = h
-            tp_scored[t_szs<<1] = mv|(d<<24)
-            tp_scored[(t_szs<<1)+1] = ((e0+32678)<<16)|(e1+32768)
-            t_szs += 1
-            max_d_sc = max(max_d_sc, d)
-            return
+        sod = od
+        sdr = dr
+        if tszs < _T_SZS:  # within main range
+            i = tszs
+            t_szs[hind] += 1
+            max_d_sc[hind] = md if md > dr else dr
+            new = True
         else:
-            if d == max_d_sc:
+            i = -1
+            # find another first
+            m_it = it-dr*2
+            for j in range(1, _T_SZS << 1, 2):
+                e2 = tscd[j]
+                c_iter = e2 >> 25
+                sd = (e2 >> 16) & 0xF
+                fh2 = e & 0x8000
+                if (sd > 2 and c_iter-sd*2 <= m_it):
+                    m_it = c_iter-sd*2
+                    i = (j-1) >> 1
+                    if c_iter <= 2:
+                        break
+            if i == -1:
+                # not found anything older, lose it
+                #  tp_scoreh2[dr] = h 
+                #  tp_scored2[dr<<1] = mv
+                #  tp_scored2[(dr<<1)+1] = e
                 return
-            # replace the first move farther from the main node (higher d)
-            maxd = 0
-            for i  in range(0, _T_SZS<<1,2):
-                curr_d = tp_scored[i]>>24
-                if  d < curr_d:
-                    tp_scoreh[i>>1] = h
-                    # store the depth in the first integer
-                    tp_scored[i] =mv|(d<<24)
-                    tp_scored[i+1] = (e0+32678)<<16|e1+32768                
-                    return  
-                else:
-                    maxd = max(curr_d, maxd)
-            max_d_sc = maxd
-        return
-    # replace move if it is already in the table
-    j = i<<1
-    tp_scored[j] = mv|(d<<24)
-    tp_scored[j+1] = ((e0+32678)<<16)|(e1+32768)
+            max_d_sc[hind] = md if md > dr else dr
+            new = True
+
+    if not fh: mv=mv&0xFFFFC000 # set the move to 0, keeping the mobility
+    # store the move and the original move only if od>sod
+    if od>=sod :
+        tscd[i << 1] = mv
+        tscd[(i << 1)+1] = e
+        if new: 
+            tsch[i] = h
+        elif md < dr:
+            max_d_sc[hind] = dr
+
+
+
 
 def reset_tp_score():
     global tp_scored
-    for i in range(0,t_szs<<1, 2):
-        tp_scored[i+1] = ((-_MT_UP+32678)<<16)|(_MT_UP+32768)
+    for hind in range(4):
+        for i in range(0, t_szs[hind] << 1, 2):
+            if (tp_scored[hind][i+1] >> 15)-16384 != _MT_LW:  # mate is a mate
+                tp_scored[hind][i+1] = 0x8000 | (-_MT_UP+16384)
 
 
-def g_sc(h, d):
+def g_kll(pdpth):
+    """Look up the tp for killers at the same distance from root
+    """
+
+    kll = [0, 0]
+    kll0 = t_kll[pdpth] if pdpth < (_MAX_DEPTH) else 0
+    if kll0:
+        kll[0] = kll0 & 0x3FFF
+        kll[1] = (kll0 >> 16)
+    return kll
+
+# hits = [dict(),dict(),dict(),dict()]
+# hits_i = [dict(),dict(),dict(),dict()]
+
+
+def g_sc(h, dr, od):
     """Get a score from the score table"""
-    global tp_scoreh, tp_scored, board
-    if d > max_d_sc:
-        return 0, (-_MT_UP, _MT_UP)
+    global tp_scoreh, tp_scored
+    board = position[0]
+
+    # if dr<_T_SZS2 and h==tp_scoreh2[dr]:
+    #     e = tp_scored2[(dr << 1)+1]
+    #     tp_scored2[(dr << 1)+1] = (e & 0x1FFFFFF) | (iter << 25)
+    #     mv = tp_scored2[dr << 1] 
+    #     position[4] = (mv >> 14)-512 # mobility
+    #     mv = mv & 0x03FFF
+    # else:
+    hind = (h) & 3
+    tscd = tp_scored[hind]
+    if dr > max_d_sc[hind]:
+        return 0, _MT_UP, 0, False, 0
     try:
-        i = tp_scoreh.index(h)
+        i = tp_scoreh[hind].index(h, 0, t_szs[hind])
+        # hits[hind][i]=hits[hind].get(i,0)+1
+        e = tscd[(i << 1)+1]
+        # hits_i[hind][iter-c_iter]=hits_i[hind].get(iter-c_iter,0)+1
+        tscd[(i << 1)+1] = (e & 0x1FFFFFF) | (iter << 25)
+        mv = tscd[i << 1] 
+        position[4] = (((mv >> 14)& 0x3FF)-512)  # mobility
+        incheck = (mv >> 29)<<1 # to return 0x02 if incheck we shift 29 instead of 29
+        mv = mv & 0x03FFF
+        
     except ValueError:
-        return  0, (-_MT_UP, _MT_UP)
-    
+        return 0,  _MT_UP, 0, False, 0
+
+    # sd = (e >> 16) & 0xF
+    sod = ((e >> 20) & 0x1F)-16
    
-    sd = tp_scored[i<<1]>>24
-    mv = (tp_scored[i<<1]&0xFFFF)
     # try to prevent hash collision
     # by checking if the move starts with a white piece
-    if  mv != 0 and board[mv>>8]>5:
-        return 0, (-_MT_UP, _MT_UP)  
+    # and does not end with a white piece
+
+    if (board[mv >> 8] > 5) or (board[mv & 63] < 6):
+        return 0, _MT_UP, 0, False, 0
     # We need to be sure, that the stored search for the score was over the same
-    # nodes as the current search.
-    if sd != d:
-        return mv, (-_MT_UP, _MT_UP)
-    e = tp_scored[(i<<1)+1]
-    e0 = (e>>16) - 32678
-    e1 = (e & 0xFFFF) - 32768
-    return mv, (e0, e1)
-    
-    
+    # nodes as the current search, so the evaluation depth has to be the same 
+    if (sod != od):
+        return mv, -_MT_UP, 0x8000, True, incheck
+    fh = e & 0x8000
+    best = (e & 0x7FFF) - 16384
+    return mv, best, fh, True, incheck
 
 
-def bound(g, od, cn):  
+def reset_pos(omv, sc, lwc_bc_ep_kp, dif, omb):
+    # board, ksq, wc_bc_ep_kp, pscore = position
+    pos = position
+    # if there wasn't a move no need to reset
+    if not omv:
+        return
+    reverse()
+    pos[3] = sc
+    pos[2] = lwc_bc_ep_kp
+    pos[4] = omb
+    restore(omv, dif)
+
+
+def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
     """ Receives a position, the gamma,depth,can_null, qs and returns the best score for the position
         Let s* be the "true" score of the sub-tree we are searching.
         The method returns r, where
         if gamma >  s* then s* <= r < gamma  (A better upper bound)
         if gamma <= s* then gamma <= r <= s* (A better lower bound) """
-    global nodes,  history, board, pscore, wc_bc_ep_kp
+    global max_qs, nodes, gm_buf
+    board, ksq, wc_bc_ep_kp, sc, mob = pos
+    mqs = max_qs
 
-    nodes += 1   
-    # Depth <= 0 is QSearch. Here any position is searched as deeply as defined by _MAX_QS
-    d = max(od, 0)
+    # Make the move
+    osc = sc # original score
+    omb = mob # original mobility
+    lwc_bc_ep_kp = wc_bc_ep_kp # local flags
+    if omv:
+        dif = move(omv, val)
+        board, ksq, wc_bc_ep_kp, sc, mob = pos
+        q = board[omv & 0x3F]
+    else:
+        dif = None
+        q = 6 | ((wc_bc_ep_kp>>20)<<3)
 
-    # if we reached the maximum depth in quaiescent search, return the score
-    sc = pscore
-    if od < -_MAX_QS:
-        return sc, 0
-    # Sunfish is a king-capture engine, so we should always check if we
-    # still have a king. Notice since this is the only termination check,
-    # the remaining code has to be comfortable with being mated, stalemated
-    # or able to capture the opponent king.
-    if sc <= -_MT_LW:
-        return -_MT_UP, 0
-
-    entry = None
-    # hash as a smallint to save memory
-    h = ghash() 
-
-    # Look for the strongest move from last time, the hash-move.
-    # and look in the table if we have already searched this position before.
-
-    killer, entry = g_sc(h, req_d - od)
-    if entry[0] >= g: 
-        return entry[0], killer
-    if entry[1] < g: 
-        return entry[1], 0
-
-    # Let's not repeat positions. We don't check for repetitions:
-    # - at the root (can_null=False) since it is in history, but not a draw.
-    # - at depth=0, since it would be expensive and break "futulity pruning".
-    if cn and d > 0 and h in history:
-        return 0, 0
-    
-    lwc_bc_ep_kp = wc_bc_ep_kp
-    # Generator of moves to search in order.
-    # This allows us to define the moves, but only calculate them if needed.    
-    def moves():
-        global wc_bc_ep_kp, pscore, board
-        nonlocal killer
-        # First try not moving at all. We only do this if there is at least one major
-        # piece left on the board, since otherwise zugzwangs are too dangerous.
-        # FIXME: We also can't null move if we can capture the opponent king.
-        # Since if we do, we won't spot illegal moves that could lead to stalemate.
-        # For now we just solve this by not using null-move in very unbalanced positions.
-        # TODO: We could actually use null-move in QS as well. Not sure it would be very useful.
-        # But still.... We just have to move stand-pat to be before null-move.
-        #if depth > 2 and can_null and any(c in pos.board for c in "RBNQ"):
-        #if depth > 2 and can_null and any(c in pos.board for c in "RBNQ") and abs(pos.score) < 500:        
-        if d > 2 and cn and abs(sc) < 125:
-            rotate(True),
-            res, best_mv= bound(1-g, od-3, False)
-            res = -res
-            rotate()
-            wc_bc_ep_kp = lwc_bc_ep_kp            
-            yield 0, res
-
-        # # For QSearch we have a different kind of null-move, namely we can just stop
-        # and not capture anything else.
-        if d == 0:
-            yield 0, sc
-            
-
-        # Is there is no killer move in the kpv
-        # try to find one with a more shallow search.
-        # This is known as Internal Iterative Deepening (IID). 
-        if not killer and d > 2:
-            _, killer = bound(g,  d-3, False)
-        
-        # If depth == 0 we only try moves with high intrinsic score (captures and
-        # promotions). Otherwise we do all moves. This is called quiescent search.            
-        val_lower = _QS - d * _QS_A 
-
-     
-        # Only play the move if it would be included at the current val-limit,
-        # since otherwise we'd get search instability.
-        # We will skip it the main loop below
-        if  killer !=0:
-            i, j, prom = killer>>8, killer&63, ((killer&0xFF)>>6)+1
-            p, q = board[i], board[j]
-
-            val,_ = value(killer, i, j, prom, p, q, None, None)
-            if val >= val_lower:
-                dif = move(killer, val)
-                res, best_mv = bound(1-g, od-1, True)
-                res = -res
-                reverse()
-                pscore = sc
-                wc_bc_ep_kp = lwc_bc_ep_kp
-                restore(killer, dif)
-                del dif 
-                yield killer, res
-        else:
-            killer = None
-
-        # Then all the other moves in the position. We sort them by the value 
-        # and we take them in reverse order to get the best ones first. We also
-        # skip the move if it's the killer move, since we already tried that one.
-        # we pop the moves from the list, to save memory
-        # filtering out the ones that are below the val_lower limit (Quiescent Search).
-
-        gm = gen_moves(val_lower)
-        for i in range(len(gm)):
-            mv = gm.pop()
-            val = (mv>>14)- 32768
-            mv = (mv & 0x3FFF) 
-            if mv == killer:
-                continue
-            # If the new score is less than gamma, the opponent will for sure just
-            # stand pat, since ""pos.score + val < gamma === -(pos.score + val) >= 1-gamma""
-            # This is known as futility pruning.            
-            if d < 0 and  sc + val < g:
-                del gm
-                # Need special case for MATE, since it would normally be caught
-                # before standing pat.            
-                yield mv, sc + val if val < _MT_LW else _MT_UP
-                # We can also break, since we have ordered the moves by value,
-                # so it can't get any better than this.                
-                return
-            if val > _MT_LW:
-                #  If the move ends with a king capture, we can stop the search
-                # and return the mate score 
-                yield mv, _MT_UP
-                return
-            if od <= -_MAX_QS:
-                yield mv, sc+val
-            else:
-                # old_pos = pos[:]         
-                # if mv == 15679:
-                #     pass      
-
-                if od <= -_MAX_QS:
-                    res = pscore
-                else:
-                    dif = move(mv, val)
-                    res, best_mv = bound(1-g, od-1, True)
-                    res = -res
-                    reverse()
-                    pscore = sc
-                    wc_bc_ep_kp = lwc_bc_ep_kp
-                    restore(mv, dif)
-                    del dif 
-                yield mv, res
-            
-    # Run through the moves, shortcutting when possible        
-    best = -_MT_UP
+    ret = 0
     best_mv = 0
-    for mv, score in moves():
-        best = max(best, score)
-        # Save the move for pv as the distance from the main node 
-        #if mv is not None and best==score and od > -_MAX_QS +1 :
-            # pv[req_d-od]=[mv]+(pv[req_d-od+1] if pv[req_d-od+1] is not None else []) 
-#            best_mv = mv
-        if best >= g:
-            best_mv = mv
-            # Save the move for killer heuristic as the distance from the main node     
-            # best_mv = mv
-            # if best_mv is not None and od > -_MAX_QS +1 :
-            #     assert best_mv==bm[0]
+    turn = wc_bc_ep_kp>>20
+    while True:
+        """Calculate early returns
+        The while is just to be able to break
+        """
+
+        # Sunfish is a king-capture engine, so we should always check if we
+        # still have a king. Notice since this is the only termination check,
+        # the remaining code has to be comfortable with being mated, stalemated
+        # or able to capture the opponent king.
+        # If the move ends with a king capture, we can stop the search
+        # and return the mate score
+        if makes_check(ksq >> 8, 0, pos, eg):
+            ret, best = 1, _MT_UP
+            break
+        lkmb = ugmv.kmb
+        # king moved through check, return a mate score
+        kp = wc_bc_ep_kp & 0xFF
+        if kp != 128:
+            for i in range(-1, 2):
+                if makes_check(kp+i,0, pos, eg):
+                    ret, best = 1, _MT_UP
+                    break
+            if ret:
+                break
+        
+        nodes += 1
+        # kill switch if we are 50% more than the allowed nodes
+        if 10*nodes > 15*max_nodes:
+            ret, best = 1, _CANCEL
+            break
+
+        entry = None
+        # hash as a smallint to save memory
+        h = ghash()
+        # Calculate the ply depth (distance from root)
+        pdpth = req_d - od
+        # Look for the strongest move from last time, the hash-move.
+        # and look in the table if we have already searched this position before.
+        hmove, e, fh, match, ret = g_sc(h, pdpth, od)
+        if fh:  # it was a fail high
+            if e >= g:
+                ret, best, best_mv = 1, e, hmove
+                break
+            # if e!=-_MT_UP: hits[0][req]=hits[0].get(req,0)+1
+        elif e < g:  # it was a fail low
+            ret, best = 1, e
+            break
+        mb = (pos[4]-mob) 
+        # Depth <= 0 is QSearch. Here any position is searched as deeply as defined by _MAX_QS
+        # if lmr and not incheck:
+        #     d = od-2 if od-2 > 0 else 0
+        # else:
+        d = od if od > 0 else 0
+        # Let's not repeat positions. We don't check for repetitions:
+        # - at the root (can_null=False) since it is in history, but not a draw.
+        # - at depth=0, since it would be expensive and break "futility pruning".
+        if cn and d > 0 and h in history:
+            ret, best = 1, 0
             break
 
 
+        # in check?
+        incheck = incheck >> 1
+        # if match:
+        #     incheck = ret | incheck
+        # else:
+        incheck = (incheck | 2) if makes_check(
+                ksq & 0xFF, 0x08, pos, eg) else incheck
+        lkmb =  (lkmb-ugmv.kmb)
+
+        # if we reached the maximum depth in quiescent search and not in check, return the score
+        if (od < -max_qs and not incheck):
+            ret, best = 1, sc + mb 
+            break
+
+        # Reverse / Forward futility pruning (non-qsearch)
+        # Only when not in check and not in qsearch
+        # If static score is already far above gamma and ply is above 2, accept it
+        # If static score is already far below gamma and ply is above 2, accept it
+        # if match:
+        #     if (not incheck and (q==14 or q==6) and d > 0 and pdpth > 2 and 
+        #             ((sc + mb + val +(_QS)*d*9) < g or (sc + mb + val - (_QS)*d*10) >= g)):
+                    
+        #         ret, best = 1, sc + mb + val
+        #         break
+        # else:
+        #     if (not incheck and (q==14 or q==6) and d > 0 and pdpth > 2 and 
+        #             ((sc + mb + val +(_QS)*d*9) < g or (sc + mb + val - (_QS)*d*10) >= g)):
+                    
+        #         ret, best = 1, sc + mb + val
+        #         break
 
 
+        best = -_MT_UP
+        ret = 0
+        break
 
-    # Stalemate checking is a bit tricky: Say we failed low, because
-    # we can't (legally) move and so the (real) score is -infty.
-    # At the next depth we are allowed to just return r, -infty <= r < gamma,
-    # which is normally fine.
-    # However, what if gamma = -10 and we don't have any legal moves?
-    # Then the score is actaully a draw and we should fail high!
-    # Thus, if best < gamma and best < 0 we need to double check what we are doing.
+    if not ret:
+        # Run through the moves, shortcutting when possible
+        while True:
+            # First we try not moving at all. We only do this if there is at least one major
+            # piece left on the board, since otherwise zugzwangs are too dangerous.
+            # FIXME: We also can't null move if we can capture the opponent king.
+            # Since if we do, we won't spot illegal moves that could lead to stalemate.
+            # For now we just solve this by not using null-move in very unbalanced positions.
+            # TODO: We could actually use null-move in QS as well. Not sure it would be very useful.
+            # But still.... We just have to move stand-pat to be before null-move.
+            # if depth > 2 and can_null and any(c in pos.board for c in "RBNQ"):
+            # if depth > 2 and can_null and any(c in pos.board for c in "RBNQ") and abs(pos.score) < 500:
+            if not lmr and not incheck and d > 2 and cn and abs(sc) < 125:
+                lwc = wc_bc_ep_kp
+                rotate(True)
+                res = bound(pos, 1-g, d-3, False, 0, mb,
+                            gm, ind, gmv, incheck, 0)
+                res = -((res & 0xFFFF)-16384)
+                rotate()
+                pos[2] = lwc
+                best = res if res > best else best
+                if res >= g:
+                    best_mv = 0
+                    break
+            # Increase the quiescent search depth if in-check and in first iteration
+            if (incheck or (req_d == 1)) and max_qs < 2*_MAX_QS:
+                max_qs += 1
 
-    # We will fix this problem another way: We add the requirement to bound, that
-    # it always returns MATE_UPPER if the king is capturable. Even if another move
-    # was also sufficient to go above gamma. If we see this value we know we are either
-    # mate, or stalemate. It then suffices to check whether we're in check.
+            if d == 0 and not incheck:
+                best = sc + mb if sc + mb > best else best
+            # For QSearch we have a different kind of null-move, namely we can just stop
+            # and not capture anything else.
+                if sc + mb >= g:
+                    best_mv = 0
+                    break
+            # Is there is no killer move in the kpv
+            # try to find one with a more shallow search.
+            # This is known as Internal Iterative Deepening (IID).
+            if not hmove and d > 2:
+                hmove = bound(pos, g,  d-2, False, 0, 0,
+                               gm, ind, gmv, incheck, 0)
+                hmove = hmove >> 16
 
-    # Note that at low depths, this may not actually be true, since maybe we just pruned
-    # all the legal moves. So sunfish may report "mate", but then after more search
-    # realize it's not a mate after all. That's fair.
-    # This is too expensive to test at depth == 0        
 
-    if d > 2 and best == -_MT_UP:
-        rotate()
-        gm = gen_moves(_MT_UP-1, ccheck=False)
-        in_check = (len(gm)==1 and gm[0]&0x3FFF==0)
-        rotate()
-        if in_check:
-            best = -_MT_LW
+            # If depth == 0 we only try moves with high intrinsic score (captures and
+            # promotions). Otherwise we do all moves. This is called quiescent search.
+            # If in check or moving out of check, we increase the range.
+            val_lower = (_QS - (d+int(incheck > 0)) * _QS_A)
+            if val_lower >= _QS and od < -5 and not incheck:
+                val_lower += 1
+            # if lmr and not incheck:
+            #     max_qs = max_qs - 1
+
+            # Only play the move if it would be included at the current val-limit,
+            # since otherwise we'd get search instability.
+            # We will skip the hash-move in the main loop below
+            if hmove != 0:
+                p = board[hmove >> 8]
+                t = (p&7) if (not eg or op_mode) else PSTMAP[p&7] 
+                val = value(pst, hmove >> 8, hmove & 63, ((
+                    hmove & 0xFF) >> 6)+1, p, board[hmove & 63], 
+                    (wc_bc_ep_kp >> 20) * 7, eg, kp, (wc_bc_ep_kp>>8) & 0xFF,t)
+                if val >= val_lower:
+                    res = bound(pos, 1-g, od-1, True, hmove,
+                                val+mb, gm, ind, None, incheck, 0)
+                    res = -((res & 0xFFFF)-16384)
+                    best = res if res > best else best
+                    if res>=g:
+                        best_mv = hmove
+                        break
+
+
+            if gmv:
+                gm = [m for m in gmv if (
+                    (m & 0x00FFFFFF) >> 14)-512 >= val_lower]
+                l = len(gm)
+                gm_buf[:l] = gm
+                gm = gm_buf
+            else:
+                l = gen_moves(gm, ind, pos, val_lower, g_kll(pdpth), lmr, h_va[turn], max_h_mv[turn], h_mv[turn], eg, op_mode, lkmb)
+                # if fh and e!=-_MT_UP: hits[1][req]=hits[1].get(req,0)+1
+            
+            # if match:
+            #     assert  (pos[4]-mob) == mb
+
+            mb = (pos[4]-mob) 
+            
+            # Reverse / Forward futility pruning (non-qsearch)
+            # Only when not in check and not in qsearch
+            # If static score is already far above gamma and ply is above 2, accept it
+            # If static score is already far below gamma and ply is above 2, accept it            
+            val = ((gm[ind+l-1] & 0x00FFFFFF) >> 14) - 512 
+            if (not incheck and (q==14 or q==6) and d > 0 and pdpth > 2 and 
+                   ((sc + mb + val + _QS*d*5) < g or (sc + mb + val - _QS*d*7) >= g)):
+                   
+                best = sc + mb + val
+                break
+            # Then all the other moves in the position. We sort them by the value
+            # and we take them in reverse order to get the best ones first. We also
+            # skip the move if it's the killer move, since we already tried that one.
+            # the ones that are below the val_lower limit (Quiescent Search) are already filtered out.
+            ret = l  # reuse variable to save memory in recursion
+            while l:
+                l -= 1
+                mvv = gm[ind+l] & 0x00FFFFFF
+                val = (mvv >> 14) - 512 
+                # prev_res = sc+val
+                best_mv = (mvv & 0x3FFF)
+
+                if best_mv == hmove:
+                    continue
+
+                # In quiescent search, if the new score is less than gamma plus a margin,
+                # we can break since it cannot be much better (unless a high exchange)
+                # This is known as futility pruning.
+                if od < 0 and sc + val + mb + abs(val) + abs(mb) < g:
+                    res = sc + val + mb
+                    best = res if res > best else best
+                    break  # inner while
+                if od <= -max_qs:
+                    # we reached the limit of quiescence search, do not bound
+                    res = sc + val + mb
+                    best = res if res > best else best
+                    if best >= g:
+                        break  # inner while
+                else:
+                    # Simple Late Move Reductions (LMR)
+                    if ret-l > 4 and pdpth > 2:
+                        lmr = 1
+                    res = bound(pos, 1-g, od-1, True, best_mv,
+                                val + mb, gm, ind+l, None, incheck, lmr)
+                    res = -((res & 0xFFFF)-16384) 
+                    best = res if res > best else best
+                    
+                    if best >= g:
+                        break
+            break
+
+        # Stalemate checking is a bit tricky: Say we failed low, because
+        # we can't (legally) move and so the (real) score is -infty.
+        # At the next depth we are allowed to just return r, -infty <= r < gamma,
+        # which is normally fine.
+        # However, what if gamma = -10 and we don't have any legal moves?
+        # Then the score is actually a draw and we should fail high!
+        # Thus, if best < gamma and best < 0 we need to double check what we are doing.
+
+        # We will fix this problem another way: We add the requirement to bound, that
+        # it always returns MATE_UPPER if the king is capturable. Even if another move
+        # was also sufficient to go above gamma. If we see this value we know we are either
+        # mate, or stalemate. It then suffices to check whether we're in check.
+
+        # Note that at low depths, this may not actually be true, since maybe we just pruned
+        # all the legal moves. So sunfish may report "mate", but then after more search
+        # realize it's not a mate after all. That's fair.
+        # This is too expensive to test at depth == 0
+
+        if best == -_MT_UP:
             best_mv = 0
-        else:
-            best = 0
-            best_mv = 0
+            best = -_MT_LW if incheck == 2 else 0
+
+        # for small transposition tables it is better to store the score in the table
+        # when the score is better than the gamma so that moves and scores can be stored in the
+        # same table
         
-    # for small transposition tables it is better to store the score in the table 
-    # when the score is better than the gamma so that moves and scores can be stored in the 
-    # same table
-    if best >= g and od > -_MAX_QS +1  and best_mv !=0:
-        s_tp(h,best_mv, best,entry[1], req_d- od)
+        if best >= g and ((od >= -16 and best_mv != 0)):
+            s_tp(h, best_mv, best, pdpth, val, od, 0x8000, pos[4], incheck)
+        if best < g and not best_mv and hmove and ((od >= -16)) and fh:
+            s_tp(h, hmove, best, pdpth, val, od, 0, pos[4], incheck)
+        # elif best < g and not best_mv and ((od >= -16)):
+        #     s_tp(h, 0, best, pdpth, val, od, 0, pos[4], incheck)
 
-   # if best < g and od > -_MAX_QS +1 :#and best_mv is not None:
-   #     s_tp(h,0, entry[0],best, req_d- od)    
-    # assert  len(bm) ==0 or best_mv == bm[0]
-    return best, best_mv
+
+        # reset max_qs if modified
+        max_qs = mqs
+
+    reset_pos(omv, osc, lwc_bc_ep_kp, dif, omb)
+    if best == _CANCEL:
+        return _NCANCEL
+    # ic(-best,best_mv)
+
+    return (best+16384) | (best_mv << 16)
 
 
 def mk_mv(mv):
@@ -744,27 +761,40 @@ def mk_mv(mv):
 
     ply += 1
     if op_mode == 1:
-        gm = [m&0x3FFF for m in gen_moves()]
+        gm = g_m()
+
+        gm = [m & 0x3FFF for m in gm]
         gm.reverse()
         # remove promotion info for the opening comparison
-        mv = mv&0x3F3F
+        mv = mv & 0x3F3F
         last_mv = gm.index(mv)
-        # check if the last move 
-        # is in the list of next moves of the opening      
+        # check if the last move
+        # is in the list of next moves of the opening
         mvs, _ = parse_sibl(op_ind, ply-1, op)
-        i = [i for i, (mv,_) in enumerate(mvs) if mv == last_mv]
+        i = [i for i, (mv, _) in enumerate(mvs) if mv == last_mv]
         if i:
-            # if it is in the list, update the next move index 
+            # if it is in the list, update the next move index
             # to the first child of the move
             op_ind = mvs[i[0]][1]
         else:
-            # if it is not in the list, exit the opening mode
-            op_mode = 0    
-       
+            op_mode = 0
+            if ply == 1:
+                # check if the last move
+                # is in the list of next moves of the opening
+                mvs, _ = parse_sibl(_OP_IND2, ply-1, op2)
+                i = [i for i, (mv, _) in enumerate(mvs) if mv == last_mv]
+                if i:
+                    # if it is in the list, update the next move index
+                    # to the first child of the move
+                    op_ind = mvs[i[0]][1]
+                    op_mode = 2
+
+    history.append(ghash())
+    if len(history) > _MAX_HIST:
+        history.pop(0)
     return move(mv)
 
-last_mv = -1
-ply=0
+
 def g_next_move(op):
     global op_ind, last_mv, op_mode, ply
     # choose a move from the children
@@ -774,118 +804,274 @@ def g_next_move(op):
         op_mode = 0
         return 0
     mv, _ = mvs[randint(0, len(mvs)-1)]
-    mv = gen_moves()[-mv-1]&0x3FFF
+    gm = g_m()
+
+    mv = gm[-mv-1] & 0x3FFF
     return mv
 
 
-def search():
+def search(gmv):
     """Iterative deepening MTD-bi search"""
-    global nodes, req_d, tp_scored, tp_scoreh,  max_d_sc, board, t_szs, pscore, pst_b, inc, op_ind
+    global nodes, req_d, tp_scored, tp_scoreh,  max_d_sc, t_szs, op_ind, iter
+    global eg, max_qs, req_d
+
+    _, _, _, pscore, _ = position
 
     nodes = 0
+    if not gmv:
+        gmv = g_mv()
     # Check if we are in opening mode
-    if op_mode==1:
-            last_mv = g_next_move(op)
-            if last_mv!=0:
-                yield 0,pscore-4, pscore, last_mv
-                return
-    # Check if we have a move from the 400 moves opening book
-    if ply == 1:
-        op_ind = 0
+    if op_mode == 1:
+        last_mv = g_next_move(op)
+        if last_mv != 0:
+            yield 0, pscore-4, pscore, last_mv
+            return
+        # Check if we have a move from the 400 moves opening book
+    elif op_mode == 2 and ply == 1:
         last_mv = g_next_move(op2)
-        if last_mv!=0:
-            yield 0,pscore-4, pscore, last_mv
+        if last_mv != 0:
+            yield 0, pscore-4, pscore, last_mv
             return
     g = 0
-    # if sum(p&7 for p in board if (p&7) < 11) <= 8:
-    if 5 not in [p&7 for p in board] or sum(p&7 for p in board if (p&7) < 5) < 13:
-             pst[5] = g_k_eg
-    elif ply < 10:
-        pst[5] = g_k
-    
-    inc =chr(randint(0,4)) + chr(randint(0,14)) + chr(randint(0,6)) +chr(randint(0,9)) +chr(randint(0,19))
-    # In finished games, we could potentially go far enough to cause a recursion
-    # limit exception. Hence we bound the ply. We also can't start at 0, since
-    # that's quiscent search, and we don't always play legal moves there.
-    # The table of moves is reset at the beginning of the search
-    # but shared across all depths
-    t_szs = 0
-    max_d_sc = 0 
+    # for i in range(len(gmv)):
+    #     gmv[i] = (gmv[i]&0x00FFFFFF )|( (gmv[i]>>17)<<24)  # reset ordering info
+    iter = 0
     for req_d in range(1, _MAX_DEPTH+1):
         lower, upper = -_MT_LW, _MT_LW
-        while lower < upper - _EVAL_ROUGHNESS:
-            score, best_mv= bound(g, req_d, False)
+        eval_dist = upper - lower
+        while eval_dist > _EVAL_ROUGHNESS + max(0, (req_d-4)*2):
+            res = bound(position, g, req_d, False, 0, 0, gm_buf, 0, gmv, 0, 0)
+            # gmv.sort()
+            if res == _NCANCEL:
+                yield req_d, g, _NCANCEL, 0
+                return
+            score, best_mv = ((res & 0xFFFF)-16384), res >> 16
             if score >= g:
                 lower = score
-            if score < g:
+            else:
                 upper = score
+            eval_dist = upper - lower
             yield req_d, g, score, best_mv
             g = (lower + upper + 1) // 2
-        # Reset the table of scores after each depth
-        # keeping the best move from the previous depth
-        # and the principal variation
-        reset_tp_score()
+            iter += 1
+        # reset_tp_score()
 
-# Helper functions for user interface
 
-def upd_hist():
-    global history, pos
-    history.append( ghash())
-    if len(history) > _MAX_HIST:
-        history.pop(0)
+history = list()
 
-def render(i):
-    rank, fil = divmod(i - _A1, 8)
-    return chr(fil + ord('a')) + str(-rank + 1)
 
-def render_mv(mv, turn=0):
-    if mv ==0:
-        return "(none)"    
-    i, j = mv>>8, mv&0x3F
-    prom = " "
-    if j <8 and board[i]|8 == _P+8:
-        prom = mapping[((mv>>6)&3)+1]
-    if turn ==1:
-        i, j = 63 - i, 63 - j       
-    return render(i) + render(j) + prom
+def g_m():
+    turn = position[2]>>20
+    gm = gm_buf
+    l = gen_moves(gm, 0, position, -_MT_LW, 0, 0, h_va[turn], max_h_mv[turn], h_mv[turn], eg, op_mode, 0)
+    gm = gm[:l]
+    return gm
 
-def can_kill_king(mv, ccheck = True):
-    global board, pscore, wc_bc_ep_kp
+def g_mv():
+    global max_qs, eg, pst
+    global t_szs, max_d_sc, _QS
+    global max_h_mv
+    global idepth
+
+    pos = position
+    lbrd, _, wc_bc_ep_kp, pscore, _ = pos
+
+    turn = wc_bc_ep_kp >> 20
+    # detect endgame and adjust score and pst accordingly
+    pvalues=b"\x00\x03\x03\x05\x09"
+    if not eg and (sum((pvalues[p & 7]) for p in lbrd if (p & 7) < 5) < 13 or sum(1 for p in lbrd if (p & 7)==0) <8):
+    # if not eg and sum(1 for p in lbrd if (p & 7)==0) < 9:
+    # if not eg:
+    #     qr = [p for p in lbrd if p&7==_Q or p&7==_R]
+    #     qr.sort()
+    #     qr = bytes(qr)
+    #     if len(qr)<=2 and (qr==b'\x03\x0B' or qr==b'\x03' or qr=='b\x0B'):
+        max_qs += 1
+        eg = 1
+        # ok = ksq & 0xFF
+        # ek = ksq >> 8
+        xor = ((wc_bc_ep_kp >> 20))*7
+        #recalculate score
+        pscore = 0
+        for i, c in enumerate(lbrd):
+            pp = c & 7
+            t = PSTMAP[pp]   
+            if pp<6 and c&8==0: # white pov
+                pscore += pst[t][i^xor]
+            elif pp<6:
+                pscore -= pst[t][i^56^xor]
+
+        # adjust score with the endgame pst for kings
+        # pstp = pst[_K]
+        # pstpeg = pst[6]
+        # pscore = pscore-pstp[ok ^ xor]+pstpeg[ok ^ xor] - \
+        #     pstp[(63-ek) ^ xor ^ 7]+pstpeg[(63-ek) ^ xor ^ 7]
+        # # adjust score with the endgame pst for pawns
+        # pstp = pst[_P]
+        # pstpeg = pst[7]
+        # for i, p in ((i, p) for i, p in enumerate(lbrd) if p & 7 == _P):
+        #     if p == _P:  # white pawn
+        #         pscore = pscore-pstp[i ^ xor] + pstpeg[i ^ xor]
+        #     else:  # black pawn
+        #         pscore = pscore-pstp[(63-i) ^ xor ^ 7] + \
+        #             pstpeg[(63-i) ^ xor ^ 7]
+        pos[3] = pscore
+
+
+    idepth = 1
+    ts = [0,0,0,0]
+    d = 0
+
+    if ply < 2:
+        max_h_mv[0], max_h_mv[1] = 0, 0
+        for i in range(_MAX_DEPTH):
+            t_kll[i] = 0
+        gm = g_m()
+        gm = [m for m in gm if not can_kill_king(m & 0x3FFF)]  
+    else:
+        # reuse heuristics from previous move
+        t_kll[:-2] = t_kll[2:]
+        t_kll[-2:] = [0, 0]
+
+        # reuse history heuristics from previous move
+        # include only possible moves from current position
+        # for both sides
+        lwc_bc_ep_kp = wc_bc_ep_kp
+        nullmove = True
+        for _ in range(2):
+            rotate(nullmove)
+            nullmove = False
+            turn = turn^1 
+            gm = g_m()
+            #print([(((m&0xFFFFFF)>>14)-512, m&0x3FFF, render_mv(m&0x3FFF, pos[2]>>20)) for m in gm])
+            gm = [m for m in gm if not can_kill_king(m & 0x3FFF)]              
+            gmm = {m & 0x3FFF for m in gm}
+            i = 0
+            for j in range(max_h_mv[turn]):
+                mv = h_mv[turn][j]
+                if mv in gmm:
+                    v = h_va[turn][j] >> 2
+                    if v > 0:
+                        h_mv[turn][i] = mv
+                        h_va[turn][i] = v
+                        i += 1
+            max_h_mv[turn] = i
+        pos[2] = lwc_bc_ep_kp
+        # put the previous PV at the beginning
+        d = recalc_tp(0, ts)
+
+    max_d_sc = [d,d, d, d]
+    t_szs = ts
+
+  
+    return gm
+
+
+def recalc_tp(d, ts):
+    global idepth
+    # move the PV
+    # to the beginning
+    _, _, wc_bc_ep_kp, pscore, mob = position
+    h = ghash()
+    hind = (h) & 3
+    tscd, tsch = tp_scored[hind],tp_scoreh[hind]
+    try:
+        # avoid including the already inserted hashes
+        i = tsch.index(h, ts[hind], t_szs[hind])
+    except ValueError:
+        return d
+    # sd = (e >> 16) & 0xF
+    e = tscd[(i << 1)+1]
+    mv = (tscd[i << 1] & 0x03FFF)    
+    sod = ((e >> 20) & 0x1F)-16
+    if d==0 and sod > 1:
+        idepth = sod
+    
+    # best = (e & 0x7FFF) - 16384
+    if mv: # store it at the beginning 
+        j = ts[hind]
+        tsch[j] = h
+        tscd[j<<1] = tscd[i << 1]
+        tscd[(j<<1)+1] = (e &0xFFF0FFFF)|(d<<16)
+        ts[hind] += 1
+        lwc_bc_ep_kp = wc_bc_ep_kp
+        # empty the matching pos to avoid stack overflow
+        tsch[i]=0
+        dif = move(mv, 0)
+        d = recalc_tp(d+1, ts)
+        reset_pos(mv, pscore, lwc_bc_ep_kp, dif, mob)
+        return d
+    else:
+        return d
+
+
+def can_kill_king(mv, ccheck=True):
+    pos = position
+    lbrd, ksq, wc_bc_ep_kp, pscore, mob = pos
     # If we just checked for opponent moves capturing the king, we would miss
     # captures in case of illegal castling.
+    res = False
+    by_black = 0
     sc = pscore
     lwc_bc_ep_kp = wc_bc_ep_kp
     if mv != 0:
         dif = move(mv)
     else:
-        # if move 0, check if the king is attacked
-        rotate()
-    res = gen_moves(ccheck=ccheck)
-    if mv!=0:
-        reverse()
-        pscore = sc
-        wc_bc_ep_kp, lwc_bc_ep_kp = lwc_bc_ep_kp, wc_bc_ep_kp
-        restore(mv, dif)
+        by_black = 0x08
+
+    lbrd, ksq, wc_bc_ep_kp, pscore, _ = position
+    if by_black:
+        king = ksq&0xff
     else:
-        rotate()
-    if len(res) == 0:
-        return False
-    if res[0]&0x3FFF ==0:
-        return True
-    if ccheck:
-        return any( abs((m&63) - (lwc_bc_ep_kp&0xFF)) < 2 for m in res)
-    return False
-    
-def threefold():
-    global history
-    return history.count(ghash()) >= 3
+        king = ksq>>8
+    if makes_check(king,by_black, pos, eg):
+        res = True
+    elif ccheck and mv:
+        kp = (wc_bc_ep_kp & 0xFF)
+        if kp != 128:
+            for i in (-1, 0, 1):
+                if makes_check(kp+i,by_black, pos, eg):
+                    res = True
+                    break
+    if mv > 0:
+        reset_pos(mv, sc, lwc_bc_ep_kp, dif, mob)
+    return res
 
-def g_trn():
-    return wc_bc_ep_kp>>20
+###############################################################################
+# UCI User interface
+###############################################################################
 
-pscore, wc_bc_ep_kp = 0, int.from_bytes(b'\x0F\x80\x80',"big")
+def render(i):
+    rank, fil = divmod(i - _A1, 8)
+    return chr(fil + ord('a')) + str(-rank + 1)
 
-history = list()
+
+def parse(c):
+    fil, rank = ord(c[0]) - ord('a'), int(c[1]) - 1
+    return _A1 + fil - 8*rank
+
+
+def parse_move(move_str, white_pov):
+    mapping = "NBRQ"
+    i, j, prom = parse(move_str[:2]), parse(
+        move_str[2:4]), move_str[4:].upper()
+    if not white_pov:
+        i, j = 63 - i, 63 - j
+    mv = i << 8 | j | mapping.index(prom) << 6
+    return mv
+
+
+def render_mv(mv, turn=0):
+    if mv == 0:
+        return "(none)"
+    i, j = mv >> 8, mv & 0x3F
+    prom = ""
+    if j < 8 and position[0][i] | 8 == _P+8:
+        prom = mapping[((mv >> 6) & 3)+1].lower()
+    if turn == 1:
+        i, j = 63 - i, 63 - j
+    return render(i) + render(j) + prom
+
 mapping = 'PNBRQK. pnbrqk. '
 
 print("Please run usunfish_chess.py")

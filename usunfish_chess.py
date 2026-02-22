@@ -10,7 +10,7 @@ from kandinsky import fill_rect as fr,draw_string as ds
 from ion import *
 from ion import keydown as kd
 from time import sleep as slp
-
+import asyncio
 
 
 pc_colors = (65535,0, 63422, 52889,65535,0, 38066, 50646)
@@ -28,11 +28,24 @@ pcs = ('DhLA3AweHIHmGIHmGIHmGIHmGMHhyB5hhB7hRJ6UweHMHhyBPiGEE+oUAT7iEBPuoRPuod3V
 
 font = (15329376,7968529,6887776,15310472,14809440,2257452,261003744,10065681,7479858,15820950,6915222,4519268,6915871,6919958,2237583,6919830)
 
+board = u.position[0]
 
 _HIGHLIGHT = const(11615)
 
+def fb64(eb):
+    """Decode a base64 encoded string"""
+    base64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    dl, ai = (len(eb) * 3) // 4 - eb.count('='), 0
+    for i in range(0, len(eb), 4):
+        bi = ((base64.index(eb[i])) << 18) | ((base64.index(eb[i+1])&0x3F) << 12) | ((base64.index(eb[i+2])&0x3F) << 6) | base64.index(eb[i+3])&0x3f
+        for byte in (bi >> 16, (bi >> 8) & 0xFF, bi & 0xFF):
+            if ai < dl: yield int(byte); ai += 1
+
 def rgb(c): return ((c>>11&0x1F)*255//31, (c>>5&0x3F)*255//63, (c&0x1F)*255//31)
 
+
+def threefold():
+    return u.history.count(u.ghash()) >= 3
 
 def font_gen(n):
     for i in range(0,28):
@@ -139,7 +152,8 @@ def dr_high(on):
 
 def g_gm1():
     global gm
-    gm = list(set((m&0x3FFF)>>8 for m in u.gen_moves() if not u.can_kill_king(m&0x3FFF)))
+    # unique start square
+    gm = list(set([(m&0x3FFF)>>8 for m in u.g_mv()]))
     gm.sort()
 
 
@@ -163,20 +177,23 @@ def set_initial_sq(i = 0):
     
 def dr_pc(x,y,p):
     piece = pcs[p&7]
-    data = u.fb64(piece)
+    data = fb64(piece)
     w, h = next(data), next(data)       
     y = y * 26 + 26-h-1
     x = x * 26 + (24 - w) // 2  +12 
     dr_img(w, h, x,y,gcl(data,pc_colors,(p>>3)*4))
 
+def g_trn():
+     return u.position[2]>> 20
 
 def dr_mv(o,d,p):
+
     if p|8 ==13 and abs(o-d) == 2:
         # calculate the actual o and d squares
         # the board does not match the visual
         # if it's black turn and not inverted
         # or white turn and inverted
-        if (u.g_trn() == 1 and not invert) or (u.g_trn() == 0 and invert):
+        if (g_trn() == 1 and not invert) or (g_trn() == 0 and invert):
             d2 = 63 - d
             inv = -1
         else:
@@ -188,10 +205,10 @@ def dr_mv(o,d,p):
             if 0 <= c+i < 8:
                 if 0<c+i <8:
                     dr_sq(c+i,r)
-                    rk = u.board[d2+i*inv]
+                    rk = board[d2+i*inv]
                     if rk|8 != 14:
                         # if it is white turn, the color is black
-                        if u.g_trn() == 0:
+                        if g_trn() == 0:
                             rk = rk|0x08
                         else:
                             rk = rk&0x07
@@ -216,7 +233,7 @@ def is_end_game():
         if not gm:
             ds("Stalemate",220,18)
             return True
-    if u.threefold():
+    if threefold():
         ds("Draw-rep",220,18)
         gm = []
         return True
@@ -228,21 +245,22 @@ def dr_trn(trn, ply):
     fr(234, 2, 13, 13, rgb(tcol[trn]))
 
 def upd_moves(mv):
-    global prev_movs, undo, trn
+    global prev_movs, undo, trn, board
 
 
     if mv!=0:
-        undo.append(u.pscore)
-        undo.append(u.wc_bc_ep_kp)
+        undo.append(u.position[3])
+        undo.append(u.position[2])
         undo.append(u.last_mv<<16|u.op_mode<<15|u.op_ind)
         dif = u.mk_mv(mv)
-        trn = u.g_trn()
+        board = u.position[0]
+        trn = g_trn()
         undo.append(dif)
         undo = undo[-8:]
         w_mv = u.render_mv(mv, 1-trn)
         prev_movs = mv.to_bytes(2,"big") + prev_movs[:6]
     else:
-        trn = u.g_trn()
+        trn = g_trn()
     fr(224, 2, 13, 13, rgb(tcol[trn]))
     ds("          ",240,0)
     ds("          ",220,20)
@@ -263,10 +281,13 @@ def upd_moves(mv):
 
 def think():
     global gm, trn
+
     ds("Thinking",240,0)
-    gm = [m&0x3FFF for m in u.gen_moves() if not u.can_kill_king(m&0x3FFF)]
+    gmv = u.g_mv()
     best=0
-    for _depth, gamma, score, mv in u.search():
+    gm = [m&0x3FFF for m in gmv]
+    u.max_nodes = 125*(2**lvl)
+    for _depth, gamma, score, mv in u.search(gmv):
         if score >= gamma:   
             best = mv  
         if u.nodes > 125*(2**lvl):
@@ -298,43 +319,45 @@ def think():
         # because who moves is always at the bottom
         dsqb = (63 - dsqb) 
         isqb = (63 - isqb)
-        upd_moves(best) 
+        upd_moves(best)
         if trn == 1:
             # if it is now black turn, black is at the bottom (turned to white).
             # white is at the top turned to black  
             # since white moved, the piece at the top has wrong color
-            p = u.board[dsqb]^0x08
+            p = board[dsqb]^0x08
         else:
             # if it is now white turn, white is at the bottom (as white).
             # black is at the top (as black)
             # since black moved, the piece has the right color
-            p = u.board[dsqb]
+            p = board[dsqb]
         dr_mv(isqb,dsqb,p)
         dr_cur(isqb, 65348)
         dr_cur(dsqb, 65348)
         if not is_end_game():
             set_initial_sq(0)
-        u.upd_hist()
+        # u.upd_hist()
     else:
         ds("Resign",220,18)
         gm=[]
     return isqb, dsqb 
 
+
 def draw_pcs():
+    global board
     r = 0
     c = 0
     if invert: 
-        u.board.reverse()
-        if u.g_trn()==1:
+        if g_trn()==1:
             # white is displayed on top in inverted mode,
             # the board needs to be reversed only if it is white turn
             # if its black turn, the board has the wrong colors
             # change colors and undo the rotation
             u.reverse()
-    elif u.g_trn()==1:
+    elif g_trn()==1:
         u.reverse()
 
-    for p in u.board:
+    board = u.position[0]
+    for p in board:
         if p&7 < 6:
             dr_pc(c,r,p)
         c = c+1 if c < 7 else 0
@@ -348,10 +371,10 @@ def draw_pcs():
         fnt = 7-i if invert  else i 
         dr_img(4, 7, x,212,font_gen(fnt))
     if invert:
-        u.board.reverse()
-        if u.g_trn()==1:
+        board.reverse()
+        if g_trn()==1:
             u.reverse()
-    elif u.g_trn()==1:
+    elif g_trn()==1:
         u.reverse()
  
 def dr_lvl(lvl):
@@ -378,105 +401,115 @@ upd_moves(0)
 # squares of the last opponent move
 dsqb = -1
 isqb = -1
-while True:
-    for ik, k in enumerate(keys):
-        k = ord(k)
-        if kd(k):
-            if  not ord(key_pressing[ik]):
-                key_pressing= key_pressing[:ik] + '\x01' + key_pressing[ik+1:]
-                if k==KEY_LEFT: move_cur(-1)
-                elif k==KEY_RIGHT: move_cur(1)
-                elif k==KEY_UP: move_cur(-8)
-                elif k==KEY_DOWN: move_cur(8) 
-                elif k==KEY_BACKSPACE:
-                    if len(undo)>7:
-                        for i in range(2):
-                            u.reverse()
-                            u.restore(int.from_bytes(prev_movs[i*2:i*2+2], "big"),undo.pop())
-                            v = undo.pop()
-                            u.last_mv = v>>16
-                            u.op_ind = v&0x3FFF
-                            u.op_mode = (v>>15)&0x01
-                            u.wc_bc_ep_kp = undo.pop()
-                            u.pscore = undo.pop()
-                            u.ply -= 1
-                            # check if the move was half move (undo and end of game)
-                            if i==0 and trn == u.g_trn():
-                                break
+# async def main():
+def main():
+    global cind, gm, prev_movs, undo, lvl, key_pressing, trn, isqb, dsqb, invert, origin, board
+    while True:
+        for ik, k in enumerate(keys):
+            k = ord(k)
+            if kd(k):
+                if  not ord(key_pressing[ik]):
+                    key_pressing= key_pressing[:ik] + '\x01' + key_pressing[ik+1:]
+                    if k==KEY_LEFT: move_cur(-1)
+                    elif k==KEY_RIGHT: move_cur(1)
+                    elif k==KEY_UP: move_cur(-8)
+                    elif k==KEY_DOWN: move_cur(8) 
+                    elif k==KEY_BACKSPACE:
+                        if len(undo)>7:
+                            for i in range(2):
+                                u.reverse()
+                                u.restore(int.from_bytes(prev_movs[i*2:i*2+2], "big"),undo.pop())
+                                board = u.position[0]
+                                v = undo.pop()
+                                u.last_mv = v>>16
+                                u.op_ind = v&0x3FFF
+                                u.op_mode = (v>>15)&0x01
+                                u.position[2] = undo.pop()
+                                u.position[3] = undo.pop()
+                                u.ply -= 1
+                                # check if the move was half move (undo and end of game)
+                                if i==0 and trn == g_trn():
+                                    break
 
-                        prev_movs = prev_movs[4:]
-                        draw_board()
-                        draw_pcs()
-                        upd_moves(0)
-                        u.history = u.history[:-2]
-                        set_initial_sq(0)
-                elif k==KEY_LN:
-                    lvl = (lvl + 1) % 7
-                    dr_lvl(lvl)
-                elif k==KEY_PI:
-                    if not is_end_game():
-                        draw_board()
-                        invert = not invert
-                        draw_pcs()           
-                        isqb, dsqb = think()
+                            prev_movs = prev_movs[4:]
+                            draw_board()
+                            draw_pcs()
+                            upd_moves(0)
+                            u.history = u.history[:-2]
+                            set_initial_sq(0)
+                    elif k==KEY_LN:
+                        lvl = (lvl + 1) % 7
+                        dr_lvl(lvl)
+                    elif k==KEY_PI:
+                        if not is_end_game():
+                            draw_board()
+                            invert = not invert
+                            draw_pcs()           
+                            isqb, dsqb = think()
 
-                elif k==KEY_EXE or k==KEY_OK:
-                    if origin:
-                        # first part of the move
-                        ds(u.render(gm[cind]),245,0)
-                        origin = False
-                        # store initial index and square
-                        iind = cind
-                        isq = gm[cind]
-                        dr_high(False)
-                        gm = list(set(m&0x3F for m in u.gen_moves() if  ((m&0x3FFF)>>8 == isq ) and not u.can_kill_king(m&0x3FFF)))                        
-                        gm.append(isq)
-                        gm.sort()
-                        dr_high(True)
-                        cind = gm.index(isq)
-                        dr_cur(isq, 0)
-                    else:
-                        # second part of the move
-                        origin = True
-
-                        # store final index 
-                        dind = cind
-                        dr_high(False)
-
-                        if dind == gm.index(isq):
-                            # cancel move
-                            set_initial_sq(iind)
-                            ds("     ",225,40)
+                    elif k==KEY_EXE or k==KEY_OK:
+                        if origin:
+                            # first part of the move
+                            ds(u.render(gm[cind]),245,0)
+                            origin = False
+                            # store initial index and square
+                            iind = cind
+                            isq = gm[cind]
+                            dr_high(False)
+                            gm = list(set(m&0x3F for m in u.g_mv() if  ((m&0x3FFF)>>8 == isq ) ))                 
+                            gm.append(isq)
+                            gm.sort()
+                            dr_high(True)
+                            cind = gm.index(isq)
+                            dr_cur(isq, 0)
                         else:
-                            # remove cursor of opponent move
-                            if isqb != -1:
-                                dr_cur(isqb)
-                                dr_cur(dsqb)
-                            mv = (isq<<8)| gm[dind]
-                            trn = 1-u.g_trn()
-                            w_mv = None
-                            dsq = gm[dind]
-                            mv = isq<<8| dsq|0xC0  # assume queen promotion
-                            # if it is white turn, the board is correct
-                            upd_moves(mv)                            
-                            if u.g_trn() == 0:
-                                # we were black
-                                p = u.board[63-dsq]
+                            # second part of the move
+                            origin = True
+
+                            # store final index 
+                            dind = cind
+                            dr_high(False)
+
+                            if dind == gm.index(isq):
+                                # cancel move
+                                set_initial_sq(iind)
+                                ds("     ",225,40)
                             else:
-                                p = u.board[63-dsq]^0x08
-                            # human is always at the bottom
-                            # so the move indexes are always correct
-                            dr_mv(isq, dsq, p)
-                            u.upd_hist()
-                            if not is_end_game():
-                                isqb, dsqb = think()
-                            else:
-                                # if it is end game, undo should only allow
-                                # a half move
-                                trn = u.g_trn()^1
+                                # remove cursor of opponent move
+                                if isqb != -1:
+                                    dr_cur(isqb)
+                                    dr_cur(dsqb)
+                                mv = (isq<<8)| gm[dind]
+                                trn = 1-g_trn()
+                                w_mv = None
+                                dsq = gm[dind]
+                                mv = isq<<8| dsq|0xC0  # assume queen promotion
+                                # if it is white turn, the board is correct
+                                upd_moves(mv)                            
+                                if g_trn() == 0:
+                                    # we were black
+                                    p = board[63-dsq]
+                                else:
+                                    p = board[63-dsq]^0x08
+                                # human is always at the bottom
+                                # so the move indexes are always correct
+                                dr_mv(isq, dsq, p)
 
-        else:
-            key_pressing=key_pressing[:ik] + '\x00' + key_pressing[ik+1:]
+                                if not is_end_game():
+                                    isqb, dsqb = think()
+                                else:
+                                    # if it is end game, undo should only allow
+                                    # a half move
+                                    trn = g_trn()^1
+
+            else:
+                key_pressing=key_pressing[:ik] + '\x00' + key_pressing[ik+1:]
 
 
-    slp(0.05)
+        slp(0.05)
+
+        # await asyncio.sleep(0.05)
+
+if __name__ == "__main__":
+    # asyncio.run(main())
+    main()
