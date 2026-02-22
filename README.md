@@ -27,6 +27,10 @@ You can play directly on your browser thanks to pyodide integration of pygame (i
 - It contains a small opening book of 1613 plies based on the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) and [Unique v110225](https://sites.google.com/site/computerschess/unique-suite-110225) openings files.
 - As a reply of non-common openings, it has 5 different answers to non-common starting positions using the 400 moves.pgn file from [https://www.scacchi64.com/downloads.html](https://www.scacchi64.com/downloads.html)
 - The hardest level is aligned with an ELO 2100 against the Stockfish engine simulating that ELO. This engine easily beats the [badger2040 port](https://github.com/niutech/chess-badger2040).
+- This version incorporates 
+    - Additional mobility evaluation, including double bishops, open/semiopen files, king safety and advanced pawns.
+    - Enhanced but basic move ordering that includes history heuristic. 
+    - Basic Late Move Reduction (LMR) and agressive futility pruning.
 - The pst and mobility tables have been tuned using the quiet-labeled.v7.epd positions file. 
 - Instead of a string, the board is a 64-item list that is part of the global position. Although a list to store the board is memory-hungry, its updatable and faster for restoring the difference when returning from a recursive call.
 - Besides the original [Sunfish](https://github.com/thomasahle/sunfish), this engine takes also inspiration on [MinimalChess](https://github.com/lithander/MinimalChessEngine),  [4ku](https://github.com/kz04px/4ku) and [MadChess](https://www.madchess.net/)
