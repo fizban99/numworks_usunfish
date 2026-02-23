@@ -21,17 +21,22 @@ You can play directly on your browser thanks to pyodide integration of pygame (i
 
 
 ## Features
-- 7 levels of difficulty based on a maximum of nodes evaluated (from 125 in level 0 up to 8000 nodes in level 6)
-- Reduced memory footprint in the NumWorks by extensively using some micropython features such as string interning and 31-bit smallints and removing the object-oriented approach of the original Sunfish.
-- It has a small hash table to effectively reduce the node traversing time on sequential iterations during the iterative deepening MTD-bi search
-- It contains a small opening book of 1613 plies based on the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) and [Unique v110225](https://sites.google.com/site/computerschess/unique-suite-110225) openings files.
+- 7 levels of difficulty based on a maximum of nodes evaluated (from around 125 in level 0 up to around 8000 nodes in level 6)
+- Reduced memory footprint by extensively using some micropython features such as string interning and 31-bit smallints and removing the object-oriented approach of the original Sunfish.
+- It uses a small hash table to reduce node traversal time during sequential iterations of the iterative deepening MTD-bi search. The table stores only fail-high moves and employs a simple age-based replacement algorithm.
+- It includes a small opening book of 1,613 plies derived from the [Balsa_270423.pgn](https://sites.google.com/site/computerschess/balsa-suite-270423) and [Unique v110225](https://sites.google.com/site/computerschess/unique-suite-110225) openings files.
 - As a reply of non-common openings, it has 5 different answers to non-common starting positions using the 400 moves.pgn file from [https://www.scacchi64.com/downloads.html](https://www.scacchi64.com/downloads.html)
-- The hardest level is aligned with an ELO 2100 against the Stockfish engine simulating that ELO. This engine easily beats the [badger2040 port](https://github.com/niutech/chess-badger2040).
+- The highest difficulty level is calibrated to approximately 2100 Elo when playing against the Stockfish engine configured to simulate that rating. At this strength, it easily defeats the [badger2040 port](https://github.com/niutech/chess-badger2040).
 - This version incorporates 
     - Additional mobility evaluation, including double bishops, open/semiopen files, king safety and advanced pawns.
-    - Enhanced but basic move ordering that includes history heuristic. 
-    - Basic Late Move Reduction (LMR) and agressive futility pruning.
-- The pst and mobility tables have been tuned using the quiet-labeled.v7.epd positions file. 
+    - Enhanced but basic move ordering with
+        - Promotions and captures first, following a simplified MVV-LVA (Most Valueable Victim - Least Valuable Aggressor)
+        - Killer moves second
+        - History heuristic third
+        - Under promotions and non-history quiets last
+    - Basic Late Move Reduction (LMR) 
+    - Agressive forward and reverse futility pruning.
+- The pst and mobility tables have been tuned using the quiet-labeled.v7.epd positions file using the L-BFGS-B algorithm of the scipy library.
 - Instead of a string, the board is a 64-item list that is part of the global position. Although a list to store the board is memory-hungry, its updatable and faster for restoring the difference when returning from a recursive call.
-- Besides the original [Sunfish](https://github.com/thomasahle/sunfish), this engine takes also inspiration on [MinimalChess](https://github.com/lithander/MinimalChessEngine),  [4ku](https://github.com/kz04px/4ku) and [MadChess](https://www.madchess.net/)
+- Besides the original [Sunfish](https://github.com/thomasahle/sunfish), this engine also draws inspiration on [MinimalChess](https://github.com/lithander/MinimalChessEngine),  [4ku](https://github.com/kz04px/4ku) and [MadChess](https://www.madchess.net/)
 - You can also play against [level 0](https://lichess.org/@/uSunfish-l1) and [level 6](https://lichess.org/@/uSunfish-l7) on lichess. There is also a special [easier level](https://lichess.org/@/uSunfish-l0).

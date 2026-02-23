@@ -146,10 +146,8 @@ def reverse():
     pos = position
     board, ksq, wc_bc_ep_kp, pscore, mob = pos
 
-    # board.reverse()
-    # for i in range(64):
-    #     board[i] = board[i] ^ 8
-    pos[0] =  [x ^ 0x08 for x in reversed(board)]    
+    for i in range(32):
+        board[i], board[63-i] = board[63-i] ^ 8, board[i] ^ 8
     pos[1] = ((ksq >> 8)^63) | (((ksq & 0xFF)^63) << 8)
 
 
@@ -308,13 +306,7 @@ def s_tp(h, mv, best, dr, val, od, fh, mob, incheck):
     e = fh | (best+16384) | (dr << 16) | ((od+16) << 20) | (iter << 25)
     it = iter
     mv = mv | ((mob+512)<<14) | ((incheck>>1) << 29)
-    # if dr < _T_SZS2:
-    #     h, tp_scoreh2[dr] = tp_scoreh2[dr], h
-    #     mv, tp_scored2[dr<<1] = tp_scored2[dr<<1], mv
-    #     e, tp_scored2[(dr<<1)+1] = tp_scored2[(dr<<1)+1], e
-    #     it = e >> 25 # local iter
-    #     if h == 0 or h==tp_scoreh2[dr]:
-    #         return
+
     hind = (h) & 3
     new = False
     tszs, tsch, tscd, md = t_szs[hind], tp_scoreh[hind], tp_scored[hind], max_d_sc[hind]
@@ -347,9 +339,6 @@ def s_tp(h, mv, best, dr, val, od, fh, mob, incheck):
                         break
             if i == -1:
                 # not found anything older, lose it
-                #  tp_scoreh2[dr] = h 
-                #  tp_scored2[dr<<1] = mv
-                #  tp_scored2[(dr<<1)+1] = e
                 return
             max_d_sc[hind] = md if md > dr else dr
             new = True
@@ -386,31 +375,19 @@ def g_kll(pdpth):
         kll[1] = (kll0 >> 16)
     return kll
 
-# hits = [dict(),dict(),dict(),dict()]
-# hits_i = [dict(),dict(),dict(),dict()]
-
-
 def g_sc(h, dr, od):
     """Get a score from the score table"""
     global tp_scoreh, tp_scored
     board = position[0]
 
-    # if dr<_T_SZS2 and h==tp_scoreh2[dr]:
-    #     e = tp_scored2[(dr << 1)+1]
-    #     tp_scored2[(dr << 1)+1] = (e & 0x1FFFFFF) | (iter << 25)
-    #     mv = tp_scored2[dr << 1] 
-    #     position[4] = (mv >> 14)-512 # mobility
-    #     mv = mv & 0x03FFF
-    # else:
+
     hind = (h) & 3
     tscd = tp_scored[hind]
     if dr > max_d_sc[hind]:
         return 0, _MT_UP, 0, False, 0
     try:
         i = tp_scoreh[hind].index(h, 0, t_szs[hind])
-        # hits[hind][i]=hits[hind].get(i,0)+1
         e = tscd[(i << 1)+1]
-        # hits_i[hind][iter-c_iter]=hits_i[hind].get(iter-c_iter,0)+1
         tscd[(i << 1)+1] = (e & 0x1FFFFFF) | (iter << 25)
         mv = tscd[i << 1] 
         position[4] = (((mv >> 14)& 0x3FF)-512)  # mobility
@@ -420,7 +397,6 @@ def g_sc(h, dr, od):
     except ValueError:
         return 0,  _MT_UP, 0, False, 0
 
-    # sd = (e >> 16) & 0xF
     sod = ((e >> 20) & 0x1F)-16
    
     # try to prevent hash collision
@@ -439,7 +415,6 @@ def g_sc(h, dr, od):
 
 
 def reset_pos(omv, sc, lwc_bc_ep_kp, dif, omb):
-    # board, ksq, wc_bc_ep_kp, pscore = position
     pos = position
     # if there wasn't a move no need to reset
     if not omv:
@@ -519,7 +494,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
             if e >= g:
                 ret, best, best_mv = 1, e, hmove
                 break
-            # if e!=-_MT_UP: hits[0][req]=hits[0].get(req,0)+1
         elif e < g:  # it was a fail low
             ret, best = 1, e
             break
@@ -550,24 +524,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
         if (od < -max_qs and not incheck):
             ret, best = 1, sc + mb 
             break
-
-        # Reverse / Forward futility pruning (non-qsearch)
-        # Only when not in check and not in qsearch
-        # If static score is already far above gamma and ply is above 2, accept it
-        # If static score is already far below gamma and ply is above 2, accept it
-        # if match:
-        #     if (not incheck and (q==14 or q==6) and d > 0 and pdpth > 2 and 
-        #             ((sc + mb + val +(_QS)*d*9) < g or (sc + mb + val - (_QS)*d*10) >= g)):
-                    
-        #         ret, best = 1, sc + mb + val
-        #         break
-        # else:
-        #     if (not incheck and (q==14 or q==6) and d > 0 and pdpth > 2 and 
-        #             ((sc + mb + val +(_QS)*d*9) < g or (sc + mb + val - (_QS)*d*10) >= g)):
-                    
-        #         ret, best = 1, sc + mb + val
-        #         break
-
 
         best = -_MT_UP
         ret = 0
@@ -623,8 +579,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
             val_lower = (_QS - (d+int(incheck > 0)) * _QS_A)
             if val_lower >= _QS and od < -5 and not incheck:
                 val_lower += 1
-            # if lmr and not incheck:
-            #     max_qs = max_qs - 1
 
             # Only play the move if it would be included at the current val-limit,
             # since otherwise we'd get search instability.
@@ -653,10 +607,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
                 gm = gm_buf
             else:
                 l = gen_moves(gm, ind, pos, val_lower, g_kll(pdpth), lmr, h_va[turn], max_h_mv[turn], h_mv[turn], eg, op_mode, lkmb)
-                # if fh and e!=-_MT_UP: hits[1][req]=hits[1].get(req,0)+1
-            
-            # if match:
-            #     assert  (pos[4]-mob) == mb
 
             mb = (pos[4]-mob) 
             
@@ -741,9 +691,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
             s_tp(h, best_mv, best, pdpth, val, od, 0x8000, pos[4], incheck)
         if best < g and not best_mv and hmove and ((od >= -16)) and fh:
             s_tp(h, hmove, best, pdpth, val, od, 0, pos[4], incheck)
-        # elif best < g and not best_mv and ((od >= -16)):
-        #     s_tp(h, 0, best, pdpth, val, od, 0, pos[4], incheck)
-
 
         # reset max_qs if modified
         max_qs = mqs
@@ -751,7 +698,6 @@ def bound(pos, g, od, cn, omv, val, gm, ind, gmv, incheck, lmr):
     reset_pos(omv, osc, lwc_bc_ep_kp, dif, omb)
     if best == _CANCEL:
         return _NCANCEL
-    # ic(-best,best_mv)
 
     return (best+16384) | (best_mv << 16)
 
@@ -833,8 +779,6 @@ def search(gmv):
             yield 0, pscore-4, pscore, last_mv
             return
     g = 0
-    # for i in range(len(gmv)):
-    #     gmv[i] = (gmv[i]&0x00FFFFFF )|( (gmv[i]>>17)<<24)  # reset ordering info
     iter = 0
     for req_d in range(1, _MAX_DEPTH+1):
         lower, upper = -_MT_LW, _MT_LW
@@ -854,7 +798,7 @@ def search(gmv):
             yield req_d, g, score, best_mv
             g = (lower + upper + 1) // 2
             iter += 1
-        # reset_tp_score()
+
 
 
 history = list()
@@ -880,16 +824,8 @@ def g_mv():
     # detect endgame and adjust score and pst accordingly
     pvalues=b"\x00\x03\x03\x05\x09"
     if not eg and (sum((pvalues[p & 7]) for p in lbrd if (p & 7) < 5) < 13 or sum(1 for p in lbrd if (p & 7)==0) <8):
-    # if not eg and sum(1 for p in lbrd if (p & 7)==0) < 9:
-    # if not eg:
-    #     qr = [p for p in lbrd if p&7==_Q or p&7==_R]
-    #     qr.sort()
-    #     qr = bytes(qr)
-    #     if len(qr)<=2 and (qr==b'\x03\x0B' or qr==b'\x03' or qr=='b\x0B'):
         max_qs += 1
         eg = 1
-        # ok = ksq & 0xFF
-        # ek = ksq >> 8
         xor = ((wc_bc_ep_kp >> 20))*7
         #recalculate score
         pscore = 0
@@ -900,21 +836,6 @@ def g_mv():
                 pscore += pst[t][i^xor]
             elif pp<6:
                 pscore -= pst[t][i^56^xor]
-
-        # adjust score with the endgame pst for kings
-        # pstp = pst[_K]
-        # pstpeg = pst[6]
-        # pscore = pscore-pstp[ok ^ xor]+pstpeg[ok ^ xor] - \
-        #     pstp[(63-ek) ^ xor ^ 7]+pstpeg[(63-ek) ^ xor ^ 7]
-        # # adjust score with the endgame pst for pawns
-        # pstp = pst[_P]
-        # pstpeg = pst[7]
-        # for i, p in ((i, p) for i, p in enumerate(lbrd) if p & 7 == _P):
-        #     if p == _P:  # white pawn
-        #         pscore = pscore-pstp[i ^ xor] + pstpeg[i ^ xor]
-        #     else:  # black pawn
-        #         pscore = pscore-pstp[(63-i) ^ xor ^ 7] + \
-        #             pstpeg[(63-i) ^ xor ^ 7]
         pos[3] = pscore
 
 
