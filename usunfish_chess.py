@@ -12,7 +12,6 @@ from ion import keydown as kd
 from time import sleep as slp
 import asyncio
 
-
 pc_colors = (65535,0, 63422, 52889,65535,0, 38066, 50646)
 
 bg=(59225, 31883)
@@ -253,7 +252,6 @@ def upd_moves(mv):
         undo.append(u.position[2])
         undo.append(u.last_mv<<16|u.op_mode<<15|u.op_ind)
         dif = u.mk_mv(mv)
-        board = u.position[0]
         trn = g_trn()
         undo.append(dif)
         undo = undo[-8:]
@@ -343,10 +341,10 @@ def think():
 
 
 def draw_pcs():
-    global board
     r = 0
     c = 0
     if invert: 
+        board.reverse()
         if g_trn()==1:
             # white is displayed on top in inverted mode,
             # the board needs to be reversed only if it is white turn
@@ -356,7 +354,6 @@ def draw_pcs():
     elif g_trn()==1:
         u.reverse()
 
-    board = u.position[0]
     for p in board:
         if p&7 < 6:
             dr_pc(c,r,p)
@@ -401,8 +398,7 @@ upd_moves(0)
 # squares of the last opponent move
 dsqb = -1
 isqb = -1
-# async def main():
-def main():
+async def main():
     global cind, gm, prev_movs, undo, lvl, key_pressing, trn, isqb, dsqb, invert, origin, board
     while True:
         for ik, k in enumerate(keys):
@@ -496,6 +492,7 @@ def main():
                                 dr_mv(isq, dsq, p)
 
                                 if not is_end_game():
+                                    await asyncio.sleep(0.05)
                                     isqb, dsqb = think()
                                 else:
                                     # if it is end game, undo should only allow
@@ -506,10 +503,7 @@ def main():
                 key_pressing=key_pressing[:ik] + '\x00' + key_pressing[ik+1:]
 
 
-        slp(0.05)
-
-        # await asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)
 
 if __name__ == "__main__":
-    # asyncio.run(main())
-    main()
+    asyncio.run(main())
